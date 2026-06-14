@@ -29,7 +29,23 @@ export async function assembleVideo(
   scenes: AssembleInput[],
   outDir: string
 ): Promise<string> {
-  const ffmpegPath = getSetting("FFMPEG_PATH");
+  const userPath = getSetting("FFMPEG_PATH");
+  let ffmpegPath = userPath;
+
+  // If user hasn't set a custom path, try bundled / env fallbacks
+  if (!ffmpegPath) {
+    // Electron main process sets FFMPEG_PATH env var pointing to bundled binary.
+    // getSetting falls back to process.env, so it's already checked above.
+    // As a last resort, try @ffmpeg-installer/ffmpeg (available in dev).
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const installer = require("@ffmpeg-installer/ffmpeg");
+      if (installer?.path) ffmpegPath = installer.path;
+    } catch {
+      // Not installed — user needs ffmpeg in PATH or set FFMPEG_PATH
+    }
+  }
+
   if (ffmpegPath) {
     ffmpeg.setFfmpegPath(ffmpegPath);
     // ffprobe lives next to ffmpeg in the same bin/ folder
@@ -39,10 +55,22 @@ export async function assembleVideo(
 
   const resolution = getSetting("VIDEO_RESOLUTION") || "1920x1080";
   const fps = Number(getSetting("VIDEO_FPS") || "30");
-  const transitionSec = Number(getSetting("TRANSITION_DURATION") || "0.5");
+  const rawTransitionSec = Number(getSetting("TRANSITION_DURATION") || "0.5");
   const tailSilence = Math.max(0, Number(getSetting("SCENE_TAIL_SILENCE") || "0.4"));
   const assembleConcurrency = Math.max(1, Number(getSetting("ASSEMBLE_CONCURRENCY") || "4"));
   const [w, h] = resolution.split("x").map(Number);
+  const keepVideoAudio = getSetting("ANIMATION_KEEP_VEO_AUDIO") === "1";
+
+  // Check if ffmpeg supports xfade (requires ffmpeg ≥ 4.3, released June 2020).
+  // The bundled @ffmpeg-installer version is from 2018 and doesn't support it.
+  const xfadeSupported = await checkXfadeSupport();
+  const transitionSec = xfadeSupported ? rawTransitionSec : 0;
+  if (!xfadeSupported && rawTransitionSec > 0) {
+    log(runId, "info",
+      "xfade transitions disabled (ffmpeg too old, requires ≥ 4.3). Using simple concat.",
+      { stage: "assemble" }
+    );
+  }
 
   const clipsDir = path.join(outDir, "clips");
   if (!fs.existsSync(clipsDir)) fs.mkdirSync(clipsDir, { recursive: true });
@@ -66,7 +94,7 @@ export async function assembleVideo(
         // scenes get a natural breath between them after concat.
         const clipDuration = audioDuration + tailSilence;
         if (item.videoPath) {
-          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence);
+          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, keepVideoAudio);
         } else {
           const zoomDirection: "in" | "out" = Math.random() < 0.5 ? "in" : "out";
           await renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, zoomDirection, tailSilence);
@@ -87,25 +115,25 @@ export async function assembleVideo(
   // 2. Concat
   const finalPath = path.join(outDir, "final.mp4");
   if (transitionSec > 0 && clipInfos.length >= 2) {
-    // Two-tier strategy:
-    //  - Small video (≤ MAX_CLIPS_PER_PASS): one monolithic xfade ffmpeg call.
-    //  - Large video: hierarchical xfade — cap each ffmpeg at MAX_CLIPS_PER_PASS
-    //    inputs and run them with bounded parallelism, then collapse the
-    //    intermediates in another pass. Repeats until ≤ MAX_CLIPS_PER_PASS remain.
-    //
-    // A monolithic xfade with hundreds of inputs blows past the system file-
-    // descriptor limit on macOS and Windows ("Resource temporarily unavailable" /
-    // EAGAIN) and ffmpeg crashes. The bounded-fan-in scheme keeps every ffmpeg
-    // process well under any reasonable per-process FD limit.
-    //
-    // `ASSEMBLE_XFADE_CHUNKS=1` forces the legacy monolithic path (useful for
-    // debugging — but it will crash on long videos).
-    const xfadeChunks = Math.max(1, Number(getSetting("ASSEMBLE_XFADE_CHUNKS") || "4"));
-    if (xfadeChunks > 1 && clipInfos.length >= xfadeChunks * 3) {
-      await concatWithCrossfadeChunked(runId, clipInfos, clipsDir, finalPath, transitionSec, fps);
-    } else {
-      await concatWithCrossfade(clipInfos, finalPath, transitionSec, fps);
-      log(runId, "info", `Crossfade ${transitionSec}s across ${clipInfos.length} scenes`, { stage: "assemble" });
+    // Try xfade transitions — if it fails for ANY reason, fall back to
+    // simple concat so the pipeline never crashes during assembly.
+    try {
+      const xfadeChunks = Math.max(1, Number(getSetting("ASSEMBLE_XFADE_CHUNKS") || "4"));
+      if (xfadeChunks > 1 && clipInfos.length >= xfadeChunks * 3) {
+        await concatWithCrossfadeChunked(runId, clipInfos, clipsDir, finalPath, transitionSec, fps);
+      } else {
+        await concatWithCrossfade(clipInfos, finalPath, transitionSec, fps);
+        log(runId, "info", `Crossfade ${transitionSec}s across ${clipInfos.length} scenes`, { stage: "assemble" });
+      }
+    } catch (xfadeErr) {
+      const msg = xfadeErr instanceof Error ? xfadeErr.message : String(xfadeErr);
+      log(runId, "warn",
+        `xfade failed (${msg.slice(0, 200)}) — falling back to simple concat (no transitions)`,
+        { stage: "assemble" }
+      );
+      // Clean up any partial output from the failed xfade attempt
+      try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
+      await concatSimple(clipInfos.map((c) => c.path), clipsDir, finalPath);
     }
   } else {
     await concatSimple(clipInfos.map((c) => c.path), clipsDir, finalPath);
@@ -113,6 +141,40 @@ export async function assembleVideo(
 
   log(runId, "success", `Final video: ${finalPath}`, { stage: "assemble" });
   return finalPath;
+}
+
+// ── FFmpeg xfade support check ──────────────────────────────────────────────
+// xfade filter requires ffmpeg ≥ 4.3 (June 2020). Older versions crash with
+// "Invalid argument" or "No such filter". We test once and cache the result.
+let _xfadeSupported: boolean | null = null;
+
+async function checkXfadeSupport(): Promise<boolean> {
+  if (_xfadeSupported !== null) return _xfadeSupported;
+  try {
+    const { execFileSync } = await import("child_process");
+    // Get the ffmpeg binary path that fluent-ffmpeg would use
+    let ffmpegBin = getSetting("FFMPEG_PATH") || process.env.FFMPEG_PATH || "";
+    if (!ffmpegBin) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const installer = require("@ffmpeg-installer/ffmpeg");
+        if (installer?.path) ffmpegBin = installer.path;
+      } catch {}
+    }
+    if (!ffmpegBin) ffmpegBin = "ffmpeg";
+    // execFileSync avoids shell quoting issues on Windows
+    const output = execFileSync(ffmpegBin, ["-filters"], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"], // capture stderr too
+    });
+    _xfadeSupported = output.includes("xfade");
+  } catch (e) {
+    // If -filters itself fails or xfade not found, check stderr
+    const msg = e instanceof Error ? (e as any).stderr || e.message : String(e);
+    _xfadeSupported = typeof msg === "string" && msg.includes("xfade");
+  }
+  return _xfadeSupported;
 }
 
 /** Reads the exact audio duration via ffprobe. */
@@ -190,8 +252,10 @@ function renderKenBurnsClip(
       .input(audioPath)
       .videoFilters(filter);
     // Pad audio with silence at the end so consecutive scenes get a breath.
+    // Use bare `apad` (pad indefinitely) — `-t` output option already cuts at
+    // the right duration. `pad_dur` isn't supported in all ffmpeg versions.
     if (tailSilenceSec > 0) {
-      cmd.audioFilters(`apad=pad_dur=${tailSilenceSec.toFixed(3)}`);
+      cmd.audioFilters(`apad`);
     }
     cmd
       .outputOptions([
@@ -238,7 +302,8 @@ async function renderAnimatedClip(
   h: number,
   fps: number,
   durationSec: number,
-  tailSilenceSec: number = 0
+  tailSilenceSec: number = 0,
+  keepVideoAudio: boolean = false
 ): Promise<void> {
   const videoDur = await probeDuration(videoPath);
 
@@ -268,14 +333,45 @@ async function renderAnimatedClip(
   return new Promise((resolve, reject) => {
     const cmd = ffmpeg()
       .input(videoPath)
-      .input(audioPath)
-      .videoFilters(videoFilter);
-    if (tailSilenceSec > 0) {
-      cmd.audioFilters(`apad=pad_dur=${tailSilenceSec.toFixed(3)}`);
-    }
-    cmd
-      .outputOptions([
-        // Explicit stream mapping — drops Veo's audio even if `mute` didn't work
+      .input(audioPath);
+
+    if (keepVideoAudio) {
+      // Mix TTS (input 1) at full volume + video audio (input 0) at 30% volume.
+      // amix produces a combined track so both narration and ambient/SFX are heard.
+      // The video audio might not exist — ffmpeg will just use TTS if it fails.
+      //
+      // IMPORTANT: video filter is included in the complexFilter chain (not as a
+      // separate -vf flag) because -vf and -filter_complex are mutually exclusive
+      // in ffmpeg and using both causes undefined behavior.
+      const padFilter = tailSilenceSec > 0
+        ? `apad,`
+        : "";
+      cmd.complexFilter([
+        `[0:v]${videoFilter}[vout]`,
+        `[0:a]volume=0.3[va]`,
+        `[1:a]${padFilter}volume=1.0[ta]`,
+        `[ta][va]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+      ]);
+      cmd.outputOptions([
+        "-map", "[vout]",
+        "-map", "[aout]",
+        `-r ${fps}`,
+        `-t ${durationSec.toFixed(3)}`,
+        "-c:v libx264",
+        "-preset veryfast",
+        "-crf 23",
+        "-pix_fmt yuv420p",
+        "-c:a aac",
+        "-b:a 192k",
+        "-movflags +faststart",
+      ]);
+    } else {
+      // TTS only — strip video's audio entirely
+      cmd.videoFilters(videoFilter);
+      if (tailSilenceSec > 0) {
+        cmd.audioFilters(`apad`);
+      }
+      cmd.outputOptions([
         "-map", "0:v:0",
         "-map", "1:a:0",
         `-r ${fps}`,
@@ -287,8 +383,36 @@ async function renderAnimatedClip(
         "-c:a aac",
         "-b:a 192k",
         "-movflags +faststart",
-      ])
-      .on("error", reject)
+      ]);
+    }
+
+    cmd
+      .on("error", (err) => {
+        // If mixing fails (video has no audio track), retry without mixing
+        if (keepVideoAudio && String(err).includes("Stream map")) {
+          const fallback = ffmpeg()
+            .input(videoPath)
+            .input(audioPath)
+            .videoFilters(videoFilter);
+          if (tailSilenceSec > 0) {
+            fallback.audioFilters(`apad`);
+          }
+          fallback.outputOptions([
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            `-r ${fps}`,
+            `-t ${durationSec.toFixed(3)}`,
+            "-c:v libx264", "-preset veryfast", "-crf 23",
+            "-pix_fmt yuv420p", "-c:a aac", "-b:a 192k",
+            "-movflags +faststart",
+          ])
+          .on("error", reject)
+          .on("end", () => resolve())
+          .save(outPath);
+        } else {
+          reject(err);
+        }
+      })
       .on("end", () => resolve())
       .save(outPath);
   });
@@ -448,41 +572,91 @@ async function concatWithCrossfadeChunked(
  * fadeDur — transition length in seconds (e.g. 0.5).
  * On each boundary, the last fadeDur seconds of clip N overlap the first fadeDur of clip N+1.
  */
-function concatWithCrossfade(
+async function concatWithCrossfade(
   clips: { path: string; durationSec: number }[],
   finalPath: string,
   fadeDur: number,
   fps: number
 ): Promise<void> {
+  // Re-probe actual durations from disk — encoded durations can differ
+  // from calculated ones by tens of milliseconds, which compounds across
+  // many clips and pushes xfade offsets past the timeline boundary.
+  const actualDurations: number[] = [];
+  for (const c of clips) {
+    try {
+      const d = await probeDuration(c.path);
+      actualDurations.push(d);
+    } catch {
+      actualDurations.push(c.durationSec); // fallback to calculated
+    }
+  }
+
+  // Safety: clamp fadeDur so it never exceeds the shortest clip.
+  const minClipDur = Math.min(...actualDurations);
+  const safeFade = Math.min(fadeDur, Math.max(0, minClipDur * 0.4));
+  if (safeFade < 0.01) {
+    // Fade is basically zero — fall back to simple concat
+    const listFile = path.join(path.dirname(finalPath), "concat_fallback.txt");
+    fs.writeFileSync(listFile, clips.map((c) => `file '${c.path.replace(/\\/g, "/")}'`).join("\n"), "utf-8");
+    return new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(listFile)
+        .inputOptions(["-f concat", "-safe 0"])
+        .outputOptions(["-c copy"])
+        .on("error", reject)
+        .on("end", () => resolve())
+        .save(finalPath);
+    });
+  }
+
   const cmd = ffmpeg();
   for (const c of clips) cmd.input(c.path);
 
-  // Build filter_complex: chained xfade for video + acrossfade for audio.
+  // ── Video: chained xfade ──────────────────────────────────────────────
+  // Each xfade takes two inputs and produces one output. We chain them:
+  //   [0:v][1:v]xfade=...offset=O1[v1]; [v1][2:v]xfade=...offset=O2[v2]; ...
+  // The offset for xfade i = cumulative duration of clips 0..i-1 minus
+  // cumulative fade overlap so far. We subtract a safety margin (50ms) from
+  // each offset to prevent floating-point rounding from exceeding the
+  // available timeline.
   let videoChain = "";
-  let audioChain = "";
   let lastV = "0:v";
-  let lastA = "0:a";
-
-  // Accumulated offset for xfade: sum of (prevDuration - fadeDur)
   let cumOffset = 0;
+  const SAFETY_MARGIN = 0.05;  // 50ms headroom per xfade
+
   for (let i = 1; i < clips.length; i++) {
-    cumOffset += clips[i - 1].durationSec - fadeDur;
+    cumOffset += actualDurations[i - 1] - safeFade;
+    // Ensure offset is always positive and within bounds
+    cumOffset = Math.max(0, cumOffset - SAFETY_MARGIN);
     const vOut = `v${i}`;
-    const aOut = `a${i}`;
-    videoChain += `[${lastV}][${i}:v]xfade=transition=fade:duration=${fadeDur}:offset=${cumOffset.toFixed(3)}[${vOut}];`;
-    audioChain += `[${lastA}][${i}:a]acrossfade=d=${fadeDur}[${aOut}];`;
+    videoChain += `[${lastV}][${i}:v]xfade=transition=fade:duration=${safeFade.toFixed(3)}:offset=${cumOffset.toFixed(3)}[${vOut}];`;
     lastV = vOut;
-    lastA = aOut;
+    // Restore the margin we subtracted (so next offset calc is correct)
+    cumOffset += SAFETY_MARGIN;
   }
-  // Strip trailing ;
-  const filterComplex = (videoChain + audioChain).replace(/;$/, "");
+
+  // ── Audio: simple concat (most robust approach) ───────────────────────
+  // Previous approach used atrim+afade+aresample per clip which was fragile.
+  // concat filter handles format differences automatically.
+  let audioChain = "";
+  const audioLabels: string[] = [];
+  for (let i = 0; i < clips.length; i++) {
+    const aLabel = `a${i}`;
+    // Normalize each audio to same format: 44100Hz stereo, then label it
+    audioChain += `[${i}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[${aLabel}];`;
+    audioLabels.push(`[${aLabel}]`);
+  }
+  const concatAudioLabel = "aout";
+  audioChain += `${audioLabels.join("")}concat=n=${clips.length}:v=0:a=1[${concatAudioLabel}]`;
+
+  const filterComplex = videoChain + audioChain;
 
   return new Promise((resolve, reject) => {
     cmd
       .complexFilter(filterComplex)
       .outputOptions([
         `-map [${lastV}]`,
-        `-map [${lastA}]`,
+        `-map [${concatAudioLabel}]`,
         `-r ${fps}`,
         "-c:v libx264",
         "-preset veryfast",

@@ -22,11 +22,20 @@ interface StatsResp {
   animationRatio: number;
 }
 
+interface ChannelSummary {
+  id: string;
+  name: string;
+  is_active: number;
+}
+
 export default function NewRunPage() {
   const [title, setTitle] = useState("");
   const [script, setScript] = useState("");
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<StatsResp | null>(null);
+  const [channels, setChannels] = useState<ChannelSummary[]>([]);
+  const [activeChannelId, setActiveChannelId] = useState("");
+  const [switchingChannel, setSwitchingChannel] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -34,7 +43,29 @@ export default function NewRunPage() {
       .then((r) => r.json())
       .then(setStats)
       .catch(() => setStats(null));
+    fetch("/api/channels")
+      .then((r) => r.json())
+      .then((list: ChannelSummary[]) => {
+        setChannels(list);
+        const active = list.find((c) => c.is_active === 1);
+        if (active) setActiveChannelId(active.id);
+      })
+      .catch(() => {});
   }, []);
+
+  async function handleChannelSwitch(id: string) {
+    setSwitchingChannel(true);
+    try {
+      await fetch("/api/channels/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      setActiveChannelId(id);
+    } finally {
+      setSwitchingChannel(false);
+    }
+  }
 
   const scriptStats = useMemo(() => {
     const text = script.trim();
@@ -123,6 +154,45 @@ export default function NewRunPage() {
         Paste a script — the system will split it into scenes, generate voiceover and imagery for
         each, then assemble the final video.
       </p>
+
+      {/* ── Channel picker ──────────────────────────────────────────── */}
+      {channels.length > 0 && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 14,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            borderColor: "var(--accent)",
+            borderWidth: 2,
+            padding: "10px 16px",
+          }}
+        >
+          <label style={{ fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>
+            Niche:
+          </label>
+          <select
+            className="select"
+            value={activeChannelId}
+            onChange={(e) => handleChannelSwitch(e.target.value)}
+            disabled={switchingChannel || busy}
+            style={{ width: "auto", minWidth: 180, maxWidth: 320 }}
+          >
+            {channels.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <span style={{ color: "#6a6a80", fontSize: 12 }}>
+            The pipeline will use this channel&apos;s prompts + voice/image settings.
+            Manage channels on the{" "}
+            <a href="/channels" style={{ color: "#7c5cff" }}>Channels</a> page.
+          </span>
+        </div>
+      )}
 
       <div className="card" style={{ display: "grid", gap: 12 }}>
         <div>

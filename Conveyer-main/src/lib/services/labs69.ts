@@ -31,6 +31,19 @@ type JobStatus = "PENDING" | "PROCESSING" | "FINALIZING" | "COMPLETED" | "FAILED
 // ── Key pool ────────────────────────────────────────────────────────────────
 
 /**
+ * Batch-level key hint.  When set, pool.pick() always returns this key
+ * instead of load-balancing.  The pipeline sets this per-batch so every
+ * job in a batch uses the same account — critical for img→vid chaining
+ * since 69labs only lets the creating account access a job.
+ */
+let _batchKey: string | null = null;
+
+/** Set the preferred key for the current batch, or null to use round-robin. */
+export function setBatchKey(key: string | null) {
+  _batchKey = key;
+}
+
+/**
  * Tracks in-flight job count per key.
  * Key list is parsed lazily from the LABS69_API_KEY setting on each pick(),
  * so users can add/remove keys live in /settings and we pick them up next job.
@@ -45,10 +58,18 @@ const pool = {
       .filter(Boolean);
   },
 
-  /** Pick the least-loaded key from the current pool. Bumps its counter. */
+  /** Pick the key for the current job. Respects the batch hint when set. */
   pick(): string {
     const keys = this.list();
     if (keys.length === 0) throw new Error("LABS69_API_KEY is not set (Settings)");
+
+    // If a batch key is set and it's a valid key, use it
+    if (_batchKey && keys.includes(_batchKey)) {
+      this.active.set(_batchKey, (this.active.get(_batchKey) ?? 0) + 1);
+      return _batchKey;
+    }
+
+    // Otherwise, pick the least-loaded key
     let best = keys[0];
     let bestCount = this.active.get(best) ?? 0;
     for (let i = 1; i < keys.length; i++) {
@@ -79,6 +100,11 @@ export function getKeyCount(): number {
   return pool.list().length;
 }
 
+/** Get the list of configured API keys. Used by pipeline for batch assignment. */
+export function getKeyList(): string[] {
+  return pool.list();
+}
+
 // ── Job ↔ key binding ───────────────────────────────────────────────────────
 
 /**
@@ -88,13 +114,23 @@ export function getKeyCount(): number {
  */
 const jobKeyMap = new Map<string, string>();
 
-/** Release a job's slot manually (used in caller error/cleanup paths). */
+/** Release a job's concurrency slot.  The jobKeyMap binding is KEPT alive
+ *  so that downstream jobs (e.g. img→vid chaining) can still look up
+ *  which key created the source job. */
 export function releaseJob(jobId: string) {
   const key = jobKeyMap.get(jobId);
   if (key) {
     pool.release(key);
-    jobKeyMap.delete(jobId);
+    // Do NOT delete from jobKeyMap — video jobs need to find the image's key
   }
+}
+
+/** Fully forget a job — release the slot AND remove the key binding.
+ *  Call this only when you're sure no downstream job will need this binding. */
+export function forgetJob(jobId: string) {
+  const key = jobKeyMap.get(jobId);
+  if (key) pool.release(key);
+  jobKeyMap.delete(jobId);
 }
 
 function authHeadersFor(key: string): Record<string, string> {
@@ -139,13 +175,13 @@ function keyFor(jobId: string): string {
 /**
  * POST helper with two kinds of automatic wait/retry instead of failing the run:
  *
- *   • 429 Too Many Requests — short-term rate spike. Honor `Retry-After` when
- *     given; otherwise back off 20s → 40s → … capped at 10 min. Up to 40 retries.
+ *   • 429 Too Many Requests — short-term rate spike. If MULTIPLE keys are
+ *     available, fails fast so the outer retry loop picks a different key.
+ *     With a single key, honors `Retry-After` or backs off 20s → 40s → …
+ *     capped at 10 min, up to 40 retries.
  *
- *   • 403 + "Hourly credit limit exceeded" — the plan's per-hour credit bucket
- *     emptied. Wait ~10 min for the hour to roll over, then retry. Up to 18
- *     retries (≈ 3 hours of total waiting). Other 403s (bad key, etc) propagate
- *     immediately so genuine auth failures don't hang the pipeline.
+ *   • 403 + "Hourly credit limit exceeded" — same strategy: fail fast with
+ *     multiple keys, wait ~10 min with a single key.
  *
  * `ctx` is optional — pass it to surface the wait in the run log so the user
  * sees "waiting for hourly window to reset" instead of silent hangs.
@@ -160,6 +196,7 @@ async function postJsonWithKey<T>(
   const MAX_CREDIT_RETRIES = 18;
   let rateRetry = 0;
   let creditRetry = 0;
+  const hasMultipleKeys = pool.list().length > 1;
   while (true) {
     const r = await fetchWithTimeout(`${BASE}${path}`, {
       method: "POST",
@@ -168,45 +205,68 @@ async function postJsonWithKey<T>(
     });
     if (r.ok) return (await r.json()) as T;
 
-    if (r.status === 429 && rateRetry < MAX_RATE_RETRIES) {
-      rateRetry++;
-      const retryAfter = Number(r.headers.get("retry-after"));
-      const waitMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? Math.min(retryAfter * 1000, 10 * 60_000)
-          : Math.min(10 * 60_000, 20_000 * rateRetry);
-      if (ctx) {
-        log(
-          ctx.runId,
-          "warn",
-          `69labs rate limit (429) — waiting ${Math.round(waitMs / 1000)}s then retrying (${rateRetry}/${MAX_RATE_RETRIES})`,
-          { stage: ctx.stage }
-        );
+    if (r.status === 429) {
+      // With multiple keys, fail fast so the outer retry picks a different key
+      if (hasMultipleKeys) {
+        if (ctx) {
+          log(ctx.runId, "warn",
+            `69labs rate limit (429) on key …${key.slice(-6)} — failing fast to try another key`,
+            { stage: ctx.stage }
+          );
+        }
+        throw new Error(`69labs POST ${path} 429: rate limited (will retry with different key)`);
       }
-      await sleep(waitMs);
-      continue;
-    }
-
-    if (r.status === 403) {
-      const errText = await r.text();
-      const isCreditLimit = /credit limit|hourly|quota/i.test(errText);
-      if (isCreditLimit && creditRetry < MAX_CREDIT_RETRIES) {
-        creditRetry++;
+      // Single key: wait and retry
+      if (rateRetry < MAX_RATE_RETRIES) {
+        rateRetry++;
         const retryAfter = Number(r.headers.get("retry-after"));
         const waitMs =
           Number.isFinite(retryAfter) && retryAfter > 0
-            ? Math.min(retryAfter * 1000, 30 * 60_000)
-            : 10 * 60_000;
+            ? Math.min(retryAfter * 1000, 10 * 60_000)
+            : Math.min(10 * 60_000, 20_000 * rateRetry);
         if (ctx) {
-          log(
-            ctx.runId,
-            "warn",
-            `69labs hourly credit limit (403) — waiting ${Math.round(waitMs / 60_000)} min for the hourly window to reset, then retrying (${creditRetry}/${MAX_CREDIT_RETRIES})`,
+          log(ctx.runId, "warn",
+            `69labs rate limit (429) — waiting ${Math.round(waitMs / 1000)}s then retrying (${rateRetry}/${MAX_RATE_RETRIES})`,
             { stage: ctx.stage }
           );
         }
         await sleep(waitMs);
         continue;
+      }
+      throw new Error(`69labs POST ${path} 429: rate limited after ${MAX_RATE_RETRIES} retries`);
+    }
+
+    if (r.status === 403) {
+      const errText = await r.text();
+      const isCreditLimit = /credit limit|hourly|quota/i.test(errText);
+      if (isCreditLimit) {
+        // With multiple keys, fail fast to try another key
+        if (hasMultipleKeys) {
+          if (ctx) {
+            log(ctx.runId, "warn",
+              `69labs credit limit (403) on key …${key.slice(-6)} — failing fast to try another key`,
+              { stage: ctx.stage }
+            );
+          }
+          throw new Error(`69labs POST ${path} 403: credit limit (will retry with different key)`);
+        }
+        // Single key: wait for hourly reset
+        if (creditRetry < MAX_CREDIT_RETRIES) {
+          creditRetry++;
+          const retryAfter = Number(r.headers.get("retry-after"));
+          const waitMs =
+            Number.isFinite(retryAfter) && retryAfter > 0
+              ? Math.min(retryAfter * 1000, 30 * 60_000)
+              : 10 * 60_000;
+          if (ctx) {
+            log(ctx.runId, "warn",
+              `69labs hourly credit limit (403) — waiting ${Math.round(waitMs / 60_000)} min for the hourly window to reset, then retrying (${creditRetry}/${MAX_CREDIT_RETRIES})`,
+              { stage: ctx.stage }
+            );
+          }
+          await sleep(waitMs);
+          continue;
+        }
       }
       throw new Error(`69labs POST ${path} 403: ${errText.slice(0, 400)}`);
     }

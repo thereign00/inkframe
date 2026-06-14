@@ -18,36 +18,50 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   ensureInit();
   const { id } = await ctx.params;
 
+  let closed = false;
+  let unsub: (() => void) | null = null;
+  let ping: ReturnType<typeof setInterval> | null = null;
+
   const stream = new ReadableStream({
     start(controller) {
       const enc = new TextEncoder();
       const send = (event: string, data: unknown) => {
-        controller.enqueue(enc.encode(`event: ${event}\n`));
-        controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+        if (closed) return;
+        try {
+          controller.enqueue(enc.encode(`event: ${event}\n`));
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          // Connection gone — clean up
+          cleanup();
+        }
       };
+
+      function cleanup() {
+        if (closed) return;
+        closed = true;
+        if (ping) clearInterval(ping);
+        if (unsub) unsub();
+        try { controller.close(); } catch {}
+      }
 
       // 1. history — capped to the recent window to keep the page responsive
       for (const log of getLogsTail(id, INITIAL_HISTORY_LIMIT)) send("log", log);
       send("ready", { runId: id });
 
       // 2. live
-      const unsub = subscribe(id, (e) => send("log", e));
+      unsub = subscribe(id, (e) => send("log", e));
 
       // 3. heartbeat so proxies don't kill the connection
-      const ping = setInterval(() => {
+      ping = setInterval(() => {
+        if (closed) return;
         try {
           controller.enqueue(enc.encode(`: ping\n\n`));
-        } catch {}
-      }, 15000);
+        } catch {
+          cleanup();
+        }
+      }, 10000);
 
-      const close = () => {
-        clearInterval(ping);
-        unsub();
-        try {
-          controller.close();
-        } catch {}
-      };
-      req.signal.addEventListener("abort", close);
+      req.signal.addEventListener("abort", cleanup);
     },
   });
 

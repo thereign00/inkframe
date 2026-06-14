@@ -51,8 +51,8 @@ const GROUPS: Group[] = [
     fields: [
       {
         key: "TTS_PROVIDER",
-        desc: "Top-level routing of TTS jobs. `69labs` is the default and covers all sub-providers below. Direct `elevenlabs` skips 69labs and uses ElevenLabs API key. `openai` uses gpt-4o-mini-tts.",
-        examples: "69labs  /  elevenlabs  /  openai",
+        desc: "Top-level routing of TTS jobs. `69labs` is the default and covers all sub-providers below. `kieai` routes through Kie AI's gateway. Direct `elevenlabs` skips both and uses ElevenLabs API key. `openai` uses gpt-4o-mini-tts.",
+        examples: "69labs  /  kieai  /  elevenlabs  /  openai",
       },
       {
         key: "TTS_VOICE_PROVIDER",
@@ -134,8 +134,8 @@ const GROUPS: Group[] = [
     fields: [
       {
         key: "IMAGE_PROVIDER",
-        desc: "Which service hosts the image model. 69labs is the default — it routes to Google, OpenAI, Black Forest, etc internally with a single key.",
-        examples: "69labs  /  replicate  /  openai  /  fal",
+        desc: "Which service hosts the image model. 69labs is the default — it routes to Google, OpenAI, Black Forest, etc internally with a single key. `kieai` is an alternative unified gateway.",
+        examples: "69labs  /  kieai  /  replicate  /  openai  /  fal",
       },
       {
         key: "IMAGE_MODEL",
@@ -160,8 +160,8 @@ const GROUPS: Group[] = [
     fields: [
       {
         key: "ANIMATION_PROVIDER",
-        desc: "Service for img2vid. `off` skips animation entirely. `69labs` uses Google Veo or xAI Grok. `replicate`/`fal` open the door to Kling, Luma, Runway etc.",
-        examples: "off  /  69labs  /  replicate  /  fal",
+        desc: "Service for img2vid. `off` skips animation entirely. `69labs` uses Google Veo or xAI Grok. `kieai` routes through Kie AI (Veo/Kling/Runway). `replicate`/`fal` open the door to Kling, Luma, Runway etc.",
+        examples: "off  /  69labs  /  kieai  /  replicate  /  fal",
       },
       {
         key: "ANIMATION_MODEL",
@@ -295,11 +295,21 @@ interface StatsResp {
   animationRatio: number;
 }
 
+/** Groups whose settings are channel-scoped (niche-defining). */
+const CHANNEL_SCOPED_GROUPS = new Set([
+  "Voice Over (TTS)",
+  "Voice Fine-Tuning (ElevenLabs voices)",
+  "Sentence Pauses (ElevenLabs voices)",
+  "Images",
+  "Animations (img2vid)",
+]);
+
 export default function AdvancedSettingsPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [revealing, setRevealing] = useState(false);
   const [stats, setStats] = useState<StatsResp | null>(null);
+  const [channelName, setChannelName] = useState<string>("");
 
   async function load(reveal = false) {
     const [settingsR, statsR] = await Promise.all([
@@ -311,7 +321,13 @@ export default function AdvancedSettingsPage() {
     setRevealing(reveal);
   }
 
-  useEffect(() => { load(false); }, []);
+  useEffect(() => {
+    load(false);
+    fetch("/api/channels/active")
+      .then((r) => r.json())
+      .then((ch) => { if (ch?.name) setChannelName(ch.name); })
+      .catch(() => {});
+  }, []);
 
   async function save() {
     const cleaned = dropMaskedSecrets(values);
@@ -392,7 +408,24 @@ export default function AdvancedSettingsPage() {
       )}
 
       {GROUPS.map((g) => (
-        <GroupCard key={g.title} group={g} values={values} setValues={setValues} />
+        <div key={g.title}>
+          {channelName && CHANNEL_SCOPED_GROUPS.has(g.title) && (
+            <div
+              style={{
+                color: "#7c5cff",
+                fontSize: 11,
+                marginBottom: 6,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              ⚡ Part of active channel &ldquo;{channelName}&rdquo; &mdash; changes
+              apply to this channel only when saved from the Prompts page.
+            </div>
+          )}
+          <GroupCard group={g} values={values} setValues={setValues} />
+        </div>
       ))}
     </div>
   );

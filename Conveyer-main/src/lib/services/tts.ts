@@ -4,6 +4,7 @@ import { getSetting } from "../settings";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
 import { createTtsJob, pollJob, downloadJob } from "./labs69";
+import { createKieTtsTask, pollKieTask, downloadKieTask } from "./kieai";
 
 export interface TtsResult {
   /** Path to the mp3 file. */
@@ -25,6 +26,16 @@ export async function synthesizeScene(
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp3`;
   const filePath = path.join(outDir, fileName);
 
+  // ── TTS disabled — generate a short silent audio file ──────────────────
+  if (provider === "off") {
+    const silenceDur = Number(getSetting("SCENE_DURATION") || "6");
+    log(runId, "info", `TTS off — generating ${silenceDur}s silent audio for scene #${scene.index}`, {
+      stage: "tts",
+    });
+    await generateSilence(filePath, silenceDur);
+    return { filePath, durationSec: silenceDur };
+  }
+
   log(runId, "info", `TTS scene #${scene.index} (${provider})`, {
     stage: "tts",
     data: { provider, text: scene.text.slice(0, 80) },
@@ -32,6 +43,8 @@ export async function synthesizeScene(
 
   if (provider === "69labs") {
     await labs69Tts(runId, scene.text, filePath);
+  } else if (provider === "kieai") {
+    await kieaiTts(runId, scene.text, filePath);
   } else if (provider === "elevenlabs") {
     await elevenLabs(scene.text, filePath);
   } else if (provider === "openai") {
@@ -40,7 +53,17 @@ export async function synthesizeScene(
     throw new Error(`Unknown TTS provider: ${provider}`);
   }
 
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`TTS output file missing: ${filePath}`);
+  }
   const stats = fs.statSync(filePath);
+  // Sanity check: a valid MP3 with speech should be at least 1 KB.
+  // Anything smaller is likely corrupt, empty, or an error HTML page.
+  if (stats.size < 1024) {
+    // Remove the broken file so it doesn't confuse retries
+    try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+    throw new Error(`TTS output too small (${stats.size} bytes) — likely failed or empty audio`);
+  }
   // Rough estimate: 16 KB/s for 128kbps mp3 — good enough for assembly.
   // Real duration is read via ffprobe in video-assemble.ts.
   const durationSec = Math.max(1, stats.size / 16000);
@@ -110,6 +133,58 @@ async function labs69Tts(runId: string, text: string, outPath: string) {
   await downloadJob("tts", jobId, outPath);
 }
 
+async function kieaiTts(runId: string, text: string, outPath: string) {
+  const rawVoice = getSetting("TTS_VOICE_ID") || "";
+  const rawModel = getSetting("TTS_MODEL") || "";
+
+  // Map 69labs / ElevenLabs model names to Kie AI's format
+  const KIE_TTS_MODEL_MAP: Record<string, string> = {
+    "eleven_multilingual_v2": "elevenlabs/text-to-speech-multilingual-v2",
+    "eleven_flash_v2_5": "elevenlabs/text-to-speech-turbo-2-5",
+    "eleven_monolingual_v1": "elevenlabs/text-to-speech-multilingual-v2",
+  };
+  const kieModel = rawModel.startsWith("elevenlabs/")
+    ? rawModel
+    : KIE_TTS_MODEL_MAP[rawModel] || "elevenlabs/text-to-speech-multilingual-v2";
+
+  const stability = parseFloatOr(getSetting("TTS_STABILITY"), 0.6);
+  const similarity = parseFloatOr(getSetting("TTS_SIMILARITY_BOOST"), 0.75);
+
+  // Kie AI accepts voice names (e.g. "Rachel", "Adam") directly.
+  // If the user set a known legacy ElevenLabs voice ID, map it to a name.
+  // Otherwise, pass through exactly what the user configured.
+  const KIE_VOICE_ID_TO_NAME: Record<string, string> = {
+    "21m00Tcm4TlvDq8ikWAM": "Rachel",
+    "ErXwobaYiN019PkySvjV": "Antoni",
+    "pNInz6obpgDQGcFmaJgB": "Adam",
+    "VR6AewLTigWG4xSOukaG": "Arnold",
+    "TxGEqnHWrfWFTfGW9XjX": "Josh",
+    "EXAVITQu4vr4xnSDxMaL": "Bella",
+    "MF3mGyEYCl7XYWbV9V6O": "Elli",
+    "yoZ06aMxZJJ28mfd3POQ": "Sam",
+    "jBpfAIEqQ950yJCAlMOl": "George",
+    "onwK4e9ZLuTAKqWW03F9": "Daniel",
+    "XB0fDUnXU5powFXDhCwa": "Charlotte",
+    "G17SuINrv2H9FC6nvetn": "Christopher",
+  };
+  // Use the user's value directly — only map if it's a known legacy ID
+  const voiceName = KIE_VOICE_ID_TO_NAME[rawVoice] || rawVoice || "Rachel";
+
+  log(runId, "debug", `KieAI TTS using voice=${voiceName} model=${kieModel}`, { stage: "tts" });
+
+  const taskId = await createKieTtsTask({
+    text,
+    voiceId: voiceName,
+    model: kieModel,
+    stability: Number.isNaN(stability) ? undefined : stability,
+    similarityBoost: Number.isNaN(similarity) ? undefined : similarity,
+    runId,
+  });
+  log(runId, "debug", `KieAI TTS task ${taskId.slice(0, 8)}… (${kieModel}/${voiceName})`, { stage: "tts" });
+  const data = await pollKieTask(taskId, runId, "tts");
+  await downloadKieTask(data, outPath);
+}
+
 function parseFloatOr(s: string, fallback: number): number {
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : fallback;
@@ -165,4 +240,32 @@ async function openaiTts(text: string, outPath: string) {
   }
   const buf = Buffer.from(await resp.arrayBuffer());
   fs.writeFileSync(outPath, buf);
+}
+
+// ── Silent audio generator (for TTS-off mode) ────────────────────────────
+
+async function generateSilence(outPath: string, durationSec: number): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { getSetting: gs } = await import("../settings");
+  const ffmpegPath = gs("FFMPEG_PATH") || "ffmpeg";
+
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath,
+      [
+        "-f", "lavfi",
+        "-i", `anullsrc=r=44100:cl=mono`,
+        "-t", String(durationSec),
+        "-c:a", "libmp3lame",
+        "-b:a", "128k",
+        "-y",
+        outPath,
+      ],
+      { timeout: 15_000 },
+      (err) => {
+        if (err) reject(new Error(`ffmpeg silence generation failed: ${err.message}`));
+        else resolve();
+      }
+    );
+  });
 }

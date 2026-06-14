@@ -4,12 +4,16 @@ import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
-import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob } from "./labs69";
+import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey } from "./labs69";
+import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
 
 /**
  * Turns a still image into a short ~5-second video clip.
  * Supports 69labs (default, uses imageJobId chaining to skip re-upload),
  * Replicate Kling/WAN, and fal.ai.
+ *
+ * If ANIMATION_FALLBACK_PROVIDER is set, automatically retries with fallback
+ * when the primary provider fails.
  *
  * Returns a path to the .mp4. If the provider is disabled, returns null
  * — the assembly step then falls back to Ken-Burns on the still image.
@@ -21,12 +25,54 @@ export async function animateScene(
   outDir: string,
   options: { providerJobId?: string; imageProvider?: string } = {}
 ): Promise<string | null> {
-  const provider = (getSetting("ANIMATION_PROVIDER") || "off").toLowerCase();
+  const provider = (getSetting("ANIMATION_PROVIDER") || "off").toLowerCase().trim();
   if (provider === "off") return null;
 
+  const fallback = (getSetting("ANIMATION_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp4`;
   const filePath = path.join(outDir, fileName);
 
+  // Try primary provider first
+  try {
+    await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
+    log(runId, "success", `Animation done: ${fileName}`, { stage: "animate" });
+    return filePath;
+  } catch (primaryErr) {
+    // If no fallback configured, or same as primary, just throw
+    if (!fallback || fallback === "off" || fallback === provider) {
+      throw primaryErr;
+    }
+
+    const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+    log(runId, "warn",
+      `Anim #${scene.index} primary (${provider}) failed: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
+      { stage: "animate" }
+    );
+
+    try {
+      await runAnimProvider(runId, fallback, scene, imagePath, filePath, options);
+      log(runId, "success", `Animation #${scene.index} recovered via fallback (${fallback}): ${fileName}`, { stage: "animate" });
+      return filePath;
+    } catch (fallbackErr) {
+      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      log(runId, "error",
+        `Anim #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
+        { stage: "animate" }
+      );
+      throw primaryErr;
+    }
+  }
+}
+
+/** Run animation with a specific provider. */
+async function runAnimProvider(
+  runId: string,
+  provider: string,
+  scene: Scene,
+  imagePath: string,
+  filePath: string,
+  options: { providerJobId?: string; imageProvider?: string },
+) {
   log(runId, "info", `img2vid scene #${scene.index} (${provider})`, {
     stage: "animate",
     data: { provider, prompt: scene.visual_prompt.slice(0, 120) },
@@ -34,6 +80,8 @@ export async function animateScene(
 
   if (provider === "69labs") {
     await labs69Img2Vid(runId, scene, options.providerJobId, options.imageProvider, filePath);
+  } else if (provider === "kieai") {
+    await kieaiImg2Vid(runId, scene, imagePath, filePath);
   } else if (provider === "replicate") {
     await replicateImg2Vid(scene, imagePath, filePath);
   } else if (provider === "fal") {
@@ -41,9 +89,6 @@ export async function animateScene(
   } else {
     throw new Error(`Unknown animation provider: ${provider}`);
   }
-
-  log(runId, "success", `Animation done: ${fileName}`, { stage: "animate" });
-  return filePath;
 }
 
 async function labs69Img2Vid(
@@ -111,8 +156,83 @@ async function labs69Img2Vid(
         }
       }
       if (attempt < MAX_ATTEMPTS) {
+        // If this was a rate/credit limit, clear the batch key so the retry
+        // picks a different API key instead of hammering the same one
+        if (/429|rate limit|credit limit/i.test(msg)) {
+          setBatchKey(null);
+        }
         const delay = 5000 * attempt;
         log(runId, "warn", `video attempt ${attempt}/${MAX_ATTEMPTS} failed: ${msg.slice(0, 200)} — retry in ${delay}ms`, {
+          stage: "animate",
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+async function kieaiImg2Vid(
+  runId: string,
+  scene: Scene,
+  imagePath: string,
+  outPath: string
+) {
+  // Use the dedicated KieAI default video model if set, otherwise map from primary
+  const kieDefault = getSetting("KIEAI_DEFAULT_VIDEO_MODEL");
+  let model: string;
+  if (kieDefault) {
+    model = kieDefault;
+  } else {
+    const rawModel = (getSetting("ANIMATION_MODEL") || "").trim();
+    const KIE_VIDEO_MODEL_MAP: Record<string, string> = {
+      "veo-video": "veo3_fast",
+      "veo": "veo3_fast",
+      "grok-imagine-video": "veo3_fast",
+    };
+    model = KIE_VIDEO_MODEL_MAP[rawModel] || rawModel || "veo3_fast";
+  }
+  const aspectRatio = getSetting("IMAGE_RATIO") || "16:9";
+  const durationSetting = getSetting("ANIMATION_DURATION") || "5";
+  const motionStyle = getPrompt("animation_motion");
+  const prompt = `${scene.visual_prompt}. ${motionStyle}`;
+
+  // Read image as base64 data URI for providers that need it
+  const imgB64 = fs.readFileSync(imagePath).toString("base64");
+  const imageUrl = `data:image/png;base64,${imgB64}`;
+
+  const keepAudio = getSetting("ANIMATION_KEEP_VEO_AUDIO") === "1";
+  const quality = getSetting("VIDEO_QUALITY") || "720p";
+
+  const MAX_ATTEMPTS = 3;
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { taskId, pollEndpoint } = await createKieVideoTask({
+        prompt,
+        imageUrl,
+        model,
+        aspectRatio,
+        duration: parseInt(durationSetting, 10) || 5,
+        quality,
+        runId,
+      });
+      log(
+        runId,
+        "debug",
+        `KieAI video task ${taskId.slice(0, 8)}… (img2vid, model=${model}, attempt=${attempt})`,
+        { stage: "animate" }
+      );
+      const data = await pollKieTask(taskId, runId, "animate", "debug", pollEndpoint);
+      await downloadKieTask(data, outPath);
+      return;
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      if (attempt < MAX_ATTEMPTS) {
+        const delay = 5000 * attempt;
+        log(runId, "warn", `KieAI video attempt ${attempt}/${MAX_ATTEMPTS} failed: ${msg.slice(0, 200)} — retry in ${delay}ms`, {
           stage: "animate",
         });
         await new Promise((r) => setTimeout(r, delay));

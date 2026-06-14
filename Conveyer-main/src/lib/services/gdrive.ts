@@ -10,9 +10,11 @@ const SCOPES = [
 ];
 
 // MUST match the URI added in Google Cloud Console > OAuth client > Authorized redirect URIs.
-// We hard-code port 3000 because Next.js may pick 3001 if 3000 is busy, but the OAuth
-// flow has to run on a stable port the user registered in their Google Cloud project.
-export const GDRIVE_REDIRECT_URI = "http://localhost:3000/api/gdrive/oauth/callback";
+// In Electron, the server runs on a dynamic port set via the PORT env var.
+// For Google Cloud, register http://localhost:3000/... as the redirect URI; the Electron
+// main process also attempts port 3000 first so this stays stable.
+const oauthPort = process.env.PORT || "3000";
+export const GDRIVE_REDIRECT_URI = `http://localhost:${oauthPort}/api/gdrive/oauth/callback`;
 
 /** Build a fresh OAuth2 client, optionally with refresh_token loaded. */
 export function getOAuth2Client(): OAuth2Client | null {

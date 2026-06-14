@@ -56,6 +56,16 @@ db.exec(`
     data_json TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_run_logs_run ON run_logs(run_id, id);
+
+  CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    prompts_json TEXT NOT NULL,
+    settings_json TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // Migrations for older DBs. SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT

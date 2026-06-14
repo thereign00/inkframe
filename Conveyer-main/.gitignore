@@ -12,3 +12,8 @@ data/runs/*
 Thumbs.db
 .vscode/
 .idea/
+
+# Electron
+electron/dist/
+dist-electron/
+build/bin/

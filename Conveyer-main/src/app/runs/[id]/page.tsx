@@ -41,33 +41,47 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   const [run, setRun] = useState<Run | null>(null);
   const [assets, setAssets] = useState<AssetsResponse | null>(null);
   const [reassembling, setReassembling] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const tail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const es = new EventSource(`/api/runs/${id}/logs`);
-    es.addEventListener("log", (ev) => {
-      const e = JSON.parse((ev as MessageEvent).data) as LogEntry;
-      setLogs((prev) => {
-        const next = [...prev, e];
-        return next.length > LOG_DISPLAY_CAP ? next.slice(-LOG_DISPLAY_CAP) : next;
-      });
-    });
-    return () => es.close();
-  }, [id]);
-
-  useEffect(() => {
     let alive = true;
-    async function tick() {
-      const [runR, assetsR] = await Promise.all([
-        fetch(`/api/runs/${id}`).then((r) => r.json()),
-        fetch(`/api/runs/${id}/assets`).then((r) => r.json()),
-      ]);
+    let lastLogId = 0;
+
+    async function poll() {
       if (!alive) return;
-      setRun(runR.run as Run);
-      setAssets(assetsR as AssetsResponse);
+      try {
+        // Fetch new logs since lastLogId
+        const logsR = await fetch(`/api/runs/${id}/logs/poll?after=${lastLogId}`);
+        if (logsR.ok) {
+          const entries = (await logsR.json()) as LogEntry[];
+          if (entries.length > 0) {
+            // Update lastLogId to the highest id
+            for (const e of entries) {
+              if (e.id && e.id > lastLogId) lastLogId = e.id;
+            }
+            setLogs((prev) => {
+              const next = [...prev, ...entries];
+              return next.length > LOG_DISPLAY_CAP ? next.slice(-LOG_DISPLAY_CAP) : next;
+            });
+          }
+        }
+
+        // Fetch run status + assets
+        const [runR, assetsR] = await Promise.all([
+          fetch(`/api/runs/${id}`).then((r) => r.json()),
+          fetch(`/api/runs/${id}/assets`).then((r) => r.json()),
+        ]);
+        if (!alive) return;
+        setRun(runR.run as Run);
+        setAssets(assetsR as AssetsResponse);
+      } catch { /* ignore fetch errors */ }
     }
-    tick();
-    const t = setInterval(tick, 2500);
+
+    // Initial fetch immediately
+    poll();
+    // Poll every 1.5 seconds
+    const t = setInterval(poll, 1500);
     return () => { alive = false; clearInterval(t); };
   }, [id]);
 
@@ -156,10 +170,26 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       )}
 
       <div className="card" style={{ marginBottom: 12, background: "#07070d", maxHeight: 420, overflowY: "auto", fontFamily: "ui-monospace, monospace", fontSize: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 6, fontFamily: "inherit", fontSize: 13 }}>Logs</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <span style={{ fontWeight: 700, fontFamily: "inherit", fontSize: 13 }}>Logs</span>
+          <button
+            onClick={() => setShowDebug((v) => !v)}
+            style={{
+              fontSize: 10,
+              padding: "2px 8px",
+              borderRadius: 4,
+              border: showDebug ? "1px solid #7c5cff" : "1px solid #2a2a3a",
+              background: showDebug ? "#2a1f5e" : "transparent",
+              color: showDebug ? "#c8b8ff" : "#6a6a80",
+              cursor: "pointer",
+            }}
+          >
+            {showDebug ? "Hide debug" : "Show debug"}
+          </button>
+        </div>
         {logs.length === 0 && <div style={{ color: "#8a8aa0" }}>Waiting for logs…</div>}
-        {logs.map((l, i) => (
-          <div key={l.id ?? i} style={{ padding: "2px 0" }}>
+        {logs.filter((l) => showDebug || l.level !== "debug").map((l, i) => (
+          <div key={`log-${l.id ?? ''}-${i}`} style={{ padding: "2px 0" }}>
             <span style={{ color: "#5a5a70" }}>{new Date(l.ts).toLocaleTimeString()}</span>{" "}
             {l.stage && <span style={{ color: "#7c5cff" }}>[{l.stage}]</span>}{" "}
             <span style={{ color: levelColor(l.level) }}>{l.level.toUpperCase()}</span>{" "}
@@ -169,7 +199,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         <div ref={tail} />
       </div>
 
-      {assets && assets.scenes.length > 0 && (
+      {assets && assets.scenes?.length > 0 && (
         <div className="card">
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Scene assets ({assets.scenes.length})</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>

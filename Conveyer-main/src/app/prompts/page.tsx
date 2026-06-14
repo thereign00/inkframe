@@ -36,12 +36,20 @@ const META: { name: string; label: string; help: string; rows: number }[] = [
 export default function PromptsPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
+  const [channelName, setChannelName] = useState("");
+  const [channelSaved, setChannelSaved] = useState(false);
 
   async function load() {
     const r = await fetch("/api/prompts");
     setValues(await r.json());
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    fetch("/api/channels/active")
+      .then((r) => r.json())
+      .then((ch) => { if (ch?.name) setChannelName(ch.name); })
+      .catch(() => {});
+  }, []);
 
   async function save() {
     await fetch("/api/prompts", {
@@ -53,6 +61,24 @@ export default function PromptsPage() {
     setTimeout(() => setSaved(false), 1500);
   }
 
+  async function saveToChannel() {
+    // Save prompts to live tables first
+    await fetch("/api/prompts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    // Then snapshot into the active channel
+    const r = await fetch("/api/channels/active", { method: "PUT" });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({} as { error?: string }));
+      alert(j.error || "Failed to save channel.");
+      return;
+    }
+    setChannelSaved(true);
+    setTimeout(() => setChannelSaved(false), 1500);
+  }
+
   return (
     <div>
       <h1 style={{ fontSize: 24, fontWeight: 800, marginBottom: 4 }}>Prompts</h1>
@@ -60,6 +86,46 @@ export default function PromptsPage() {
         These are the system prompts that drive how the LLM splits scripts and what visual style the
         image/video generators produce. Changes take effect on the next run — no restart needed.
       </p>
+
+      {/* ── Active channel indicator ──────────────────────────────────── */}
+      {channelName && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 14,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            borderColor: "var(--accent)",
+            padding: "10px 16px",
+          }}
+        >
+          <span style={{ fontWeight: 700, fontSize: 14 }}>
+            Editing channel:
+          </span>
+          <span
+            style={{
+              background: "linear-gradient(135deg, #7c5cff, #a78bfa)",
+              color: "white",
+              padding: "2px 12px",
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {channelName}
+          </span>
+          <span style={{ color: "#6a6a80", fontSize: 12, flex: 1 }}>
+            Switch channels on the{" "}
+            <a href="/channels" style={{ color: "#7c5cff" }}>Channels</a> page.
+          </span>
+          <button className="btn" onClick={saveToChannel} style={{ fontSize: 13, padding: "5px 14px" }}>
+            {channelSaved ? "Saved ✓" : "Save to channel"}
+          </button>
+        </div>
+      )}
+
       <div style={{ marginBottom: 12 }}>
         <button className="btn" onClick={save}>{saved ? "Saved ✓" : "Save all prompts"}</button>
       </div>

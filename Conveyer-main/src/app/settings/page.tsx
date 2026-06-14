@@ -38,6 +38,11 @@ const MAIN_GROUPS: Group[] = [
         required: true,
         multiline: true,
       },
+      {
+        key: "KIEAI_API_KEY",
+        desc: "Alternative to 69labs — Kie AI (kie.ai) is a unified gateway for TTS, images, and video. Set TTS_PROVIDER / IMAGE_PROVIDER / ANIMATION_PROVIDER to 'kieai' in Advanced settings to use it. Both providers can coexist — just set the one you want per service.",
+        examples: "Get your API key from https://kie.ai → Dashboard → API Keys",
+      },
     ],
   },
 ];

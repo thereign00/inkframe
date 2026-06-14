@@ -11,6 +11,7 @@ export const SETTING_KEYS = [
 
   // ── Optional / backup providers ───────────────────────────────────
   "ELEVENLABS_API_KEY",      // direct ElevenLabs (without 69labs)
+  "KIEAI_API_KEY",            // Kie AI — unified gateway (TTS + images + video)
   "REPLICATE_API_TOKEN",     // Replicate (Flux / Kling)
   "ANTHROPIC_API_KEY",       // Claude (alternative to Gemini)
   "OPENAI_API_KEY",          // OpenAI TTS / image backup
@@ -25,7 +26,7 @@ export const SETTING_KEYS = [
   "SCENE_SPLIT_MODEL",       // e.g. gemini-flash-latest, claude-sonnet-4-6
 
   // ── Text-to-Speech ────────────────────────────────────────────────
-  "TTS_PROVIDER",            // 69labs | elevenlabs | openai
+  "TTS_PROVIDER",            // 69labs | kieai | elevenlabs | openai
   "TTS_VOICE_PROVIDER",      // For 69labs: edgetts | elevenlabs | voice-clone
   "TTS_VOICE_ID",            // Voice id (ElevenLabs / Edge / clone UUID)
   "TTS_MODEL",               // e.g. eleven_multilingual_v2
@@ -44,23 +45,29 @@ export const SETTING_KEYS = [
   "TTS_PAUSE_FREQUENCY",     // 1–100
 
   // ── Images ────────────────────────────────────────────────────────
-  "IMAGE_PROVIDER",          // 69labs | replicate | openai | fal
+  "IMAGE_PROVIDER",          // 69labs | kieai | replicate | openai | fal
+  "IMAGE_FALLBACK_PROVIDER", // Fallback if primary provider fails (off | 69labs | kieai)
   "IMAGE_MODEL",             // e.g. nano-banana-pro, imagen-4, seedream-4.5
   "IMAGE_RATIO",             // e.g. 16:9, 9:16, 1:1
   "IMAGE_RESOLUTION",        // 1k | 2k | 4k (for models that support it)
+  "KIEAI_DEFAULT_IMAGE_MODEL", // Default KieAI image model (used during fallback)
 
   // ── Animations (img2vid) ──────────────────────────────────────────
-  "ANIMATION_PROVIDER",      // off | 69labs | replicate | fal
+  "ANIMATION_PROVIDER",      // off | 69labs | kieai | replicate | fal
+  "ANIMATION_FALLBACK_PROVIDER", // Fallback if primary animation provider fails (off | 69labs | kieai)
   "ANIMATION_MODEL",         // e.g. veo-video, grok-imagine-video
   "ANIMATION_RATIO_PERCENT", // 0–100, percentage of scenes to animate
   "ANIMATION_DISTRIBUTION",  // first-half | alternating | random | all
   "ANIMATION_DURATION",      // seconds (provider-dependent)
   "ANIMATION_KEEP_VEO_AUDIO", // "1" to keep Veo's generated ambient audio
+  "VIDEO_QUALITY",             // 480p | 720p | 1080p (for Runway/Minimax/Wan models)
+  "KIEAI_DEFAULT_VIDEO_MODEL", // Default KieAI video model (used during fallback)
 
   // ── Video assembly (FFmpeg) ───────────────────────────────────────
   "VIDEO_RESOLUTION",        // e.g. 1920x1080
   "VIDEO_FPS",               // 24 / 30 / 60
   "SCENE_DURATION_SECONDS",  // fallback duration when TTS length is unknown
+  "SCENE_DURATION",           // per-scene duration in seconds when TTS is off
   "TRANSITION_DURATION",     // crossfade between scenes in seconds (0 = none)
   "SCENE_TAIL_SILENCE",      // silence appended to each clip's audio (seconds), creates breathing room between scenes
 
@@ -71,6 +78,7 @@ export const SETTING_KEYS = [
   "ASSEMBLE_CONCURRENCY",    // parallel FFmpeg clip renders
   "ASSEMBLE_XFADE_CHUNKS",            // 1 = monolithic xfade (legacy); anything else = hierarchical
   "ASSEMBLE_XFADE_MAX_CLIPS_PER_PASS", // hard cap on inputs per ffmpeg xfade call (default 50)
+  "BATCH_SIZE",                // how many scenes process concurrently in each batch
 
   // ── Google Drive sync ─────────────────────────────────────────────
   // OAuth2 credentials from Google Cloud Console (Web Application client).
@@ -98,14 +106,49 @@ const upsertStmt = db.prepare(
     "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')"
 );
 
+/**
+ * In-memory override map for channel-scoped settings.
+ * Populated by `applyChannelOverrides()` whenever the active channel changes
+ * or settings are saved.  `getSetting()` checks this map FIRST — if the key
+ * is present, it returns the in-memory value, bypassing the DB entirely.
+ * This guarantees the pipeline always uses exactly what the user saved.
+ */
+const _overrides = new Map<string, string>();
+
+/** Load channel-scoped settings into the in-memory override map.
+ *  Called by channels.ts whenever settings are saved or a channel is activated. */
+export function applyChannelOverrides(settings: Record<string, string>) {
+  for (const key of CHANNEL_SCOPED_KEYS) {
+    if (key in settings) {
+      _overrides.set(key, settings[key]);
+      // Also persist to DB for non-pipeline readers (settings page, etc)
+      upsertStmt.run(key, settings[key]);
+    }
+  }
+}
+
+/** Clear in-memory overrides (used when switching channels). */
+export function clearChannelOverrides() {
+  _overrides.clear();
+}
+
 export function getSetting(key: SettingKey): string {
+  // 1. In-memory override (from active channel) takes highest priority
+  const override = _overrides.get(key);
+  if (override !== undefined && override !== "") return override;
+  // 2. DB value
   const row = getStmt.get(key) as { value: string } | undefined;
   if (row && row.value !== "") return row.value;
+  // 3. Environment variable fallback
   return process.env[key] ?? "";
 }
 
 export function setSetting(key: SettingKey, value: string) {
   upsertStmt.run(key, value);
+  // Keep override map in sync if this is a scoped key
+  if ((CHANNEL_SCOPED_KEYS as readonly string[]).includes(key)) {
+    _overrides.set(key, value);
+  }
 }
 
 export function getAllSettings(): Record<string, string> {
@@ -146,6 +189,7 @@ export const DEFAULTS: Record<SettingKey, string> = {
 
   // Optional providers
   ELEVENLABS_API_KEY: "",
+  KIEAI_API_KEY: "",
   REPLICATE_API_TOKEN: "",
   ANTHROPIC_API_KEY: "",
   OPENAI_API_KEY: "",
@@ -159,13 +203,12 @@ export const DEFAULTS: Record<SettingKey, string> = {
   SCENE_SPLIT_PROVIDER: "google",
   SCENE_SPLIT_MODEL: "gemini-flash-latest",
 
-  // TTS — runs through 69labs; ElevenLabs is the high-quality voice family and
-  // the intended default (the voice fine-tuning below is all ElevenLabs-specific).
-  // Edge TTS (free Microsoft voices) and voice-clone are the alternatives,
-  // switchable via TTS_VOICE_PROVIDER.
-  TTS_PROVIDER: "69labs",
+  // TTS — default runs through KieAI's ElevenLabs gateway.
+  // 69labs is still available as an alternative (set TTS_PROVIDER to "69labs").
+  // Voice names (e.g. "Rachel", "Adam") work on KieAI; voice IDs work on 69labs.
+  TTS_PROVIDER: "kieai",
   TTS_VOICE_PROVIDER: "elevenlabs",
-  TTS_VOICE_ID: "G17SuINrv2H9FC6nvetn", // ElevenLabs "Christopher" — warm documentary male
+  TTS_VOICE_ID: "Rachel", // ElevenLabs "Rachel" — works on both KieAI and 69labs
   TTS_MODEL: "eleven_multilingual_v2",
   TTS_SPLIT_TYPE: "smart",
 
@@ -181,24 +224,30 @@ export const DEFAULTS: Record<SettingKey, string> = {
   TTS_PAUSE_DURATION: "0.4",
   TTS_PAUSE_FREQUENCY: "1",
 
-  // Images
-  IMAGE_PROVIDER: "69labs",
-  IMAGE_MODEL: "nano-banana-pro",
+  // Images — KieAI uses flux-kontext-pro by default; 69labs uses nano-banana-pro
+  IMAGE_PROVIDER: "kieai",
+  IMAGE_FALLBACK_PROVIDER: "",
+  IMAGE_MODEL: "flux-kontext-pro",
   IMAGE_RATIO: "16:9",
   IMAGE_RESOLUTION: "1k",
 
-  // Animations
-  ANIMATION_PROVIDER: "69labs",
+  // Animations — KieAI by default; 69labs available per channel
+  ANIMATION_PROVIDER: "kieai",
+  ANIMATION_FALLBACK_PROVIDER: "",
   ANIMATION_MODEL: "veo-video",
   ANIMATION_RATIO_PERCENT: "50",
   ANIMATION_DISTRIBUTION: "first-half",
   ANIMATION_DURATION: "5",
   ANIMATION_KEEP_VEO_AUDIO: "",
+  VIDEO_QUALITY: "720p",
+  KIEAI_DEFAULT_IMAGE_MODEL: "flux-kontext-pro",
+  KIEAI_DEFAULT_VIDEO_MODEL: "veo3_fast",
 
   // Video assembly
   VIDEO_RESOLUTION: "1920x1080",
   VIDEO_FPS: "30",
   SCENE_DURATION_SECONDS: "5",
+  SCENE_DURATION: "6",
   TRANSITION_DURATION: "0.5",
   SCENE_TAIL_SILENCE: "0.4",
 
@@ -209,6 +258,7 @@ export const DEFAULTS: Record<SettingKey, string> = {
   ASSEMBLE_CONCURRENCY: "4",
   ASSEMBLE_XFADE_CHUNKS: "4",
   ASSEMBLE_XFADE_MAX_CLIPS_PER_PASS: "50",
+  BATCH_SIZE: "10",
 
   // Google Drive — all empty by default. User fills client_id/secret;
   // OAuth flow fills refresh_token + email; folders auto-create on first sync.
@@ -228,3 +278,19 @@ export function seedDefaults() {
     if (!row) upsertStmt.run(k, v);
   }
 }
+
+/**
+ * Channel-scoped keys — the niche-defining subset of settings that each
+ * channel stores its own copy of. Everything NOT in this list (API keys,
+ * paths, video assembly, concurrency, Drive) stays global.
+ */
+export const CHANNEL_SCOPED_KEYS: SettingKey[] = [
+  "IMAGE_PROVIDER", "IMAGE_FALLBACK_PROVIDER", "IMAGE_MODEL", "IMAGE_RATIO", "IMAGE_RESOLUTION",
+  "TTS_PROVIDER", "TTS_VOICE_PROVIDER", "TTS_VOICE_ID", "TTS_MODEL", "TTS_SPLIT_TYPE",
+  "TTS_SPEED", "TTS_STABILITY", "TTS_SIMILARITY_BOOST", "TTS_STYLE", "TTS_USE_SPEAKER_BOOST",
+  "TTS_AUTO_PAUSE", "TTS_PAUSE_DURATION", "TTS_PAUSE_FREQUENCY",
+  "ANIMATION_PROVIDER", "ANIMATION_FALLBACK_PROVIDER", "ANIMATION_MODEL", "ANIMATION_RATIO_PERCENT",
+  "ANIMATION_DISTRIBUTION", "ANIMATION_DURATION", "ANIMATION_KEEP_VEO_AUDIO",
+  "VIDEO_QUALITY",
+  "KIEAI_DEFAULT_IMAGE_MODEL", "KIEAI_DEFAULT_VIDEO_MODEL",
+];

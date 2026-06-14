@@ -1,0 +1,67 @@
+appId: com.inkframe.app
+productName: Inkframe
+
+# ── Auto-update via GitHub Releases ────────────────────────────────────
+# electron-updater checks this repo for new releases.
+# To publish: set GH_TOKEN env var, then run `npm run dist:publish`
+publish:
+  provider: github
+  owner: thereign00
+  repo: inkframe
+
+directories:
+  output: dist-electron
+  buildResources: build
+
+# ── What goes inside the app ───────────────────────────────────────────
+# Disable asar so native addons (better-sqlite3) and file I/O work
+# without needing asarUnpack workarounds.
+asar: false
+
+# We rebuild native modules ourselves in prepare-electron.mjs.
+# electron-builder's own rebuild incorrectly overwrites the Turbopack
+# hashed copies, so we disable it here.
+npmRebuild: false
+
+files:
+  - ".next/standalone/**"
+  - "electron/dist/**"
+  - "package.json"
+  - "build/icon.png"
+  - "!**/*.ts"
+  - "!**/*.map"
+  - "!**/node_modules/.cache/**"
+
+# FFmpeg + ffprobe binaries — placed outside the app dir in resources/bin/
+extraResources:
+  - from: "build/bin"
+    to: "bin"
+    filter:
+      - "**/*"
+
+# ── Windows ────────────────────────────────────────────────────────────
+win:
+  target: nsis
+  icon: build/icon.png
+  # Skip code signing for now — set to true once you have a certificate
+  forceCodeSigning: false
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: "Inkframe-Setup-${version}.${ext}"
+  shortcutName: Inkframe
+  menuCategory: true
+
+# ── Mac (placeholder — not built yet) ─────────────────────────────────
+# mac:
+#   target: dmg
+#   icon: build/icon.png
+#   category: public.app-category.video
+#   hardenedRuntime: true
+#   gatekeeperAssess: false
+# dmg:
+#   artifactName: "Inkframe-${version}.${ext}"
+# afterSign: scripts/notarize.js

@@ -4,7 +4,8 @@ import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
-import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob } from "./labs69";
+import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey } from "./labs69";
+import { createKieImageTask, pollKieTask, downloadKieTask } from "./kieai";
 
 export interface ImageResult {
   /** Path to the png file. */
@@ -18,34 +19,85 @@ export interface ImageResult {
 /**
  * Generates one illustration for a scene.
  * Supports 69labs (default), Replicate (Flux), OpenAI Images, fal.ai.
+ * If IMAGE_FALLBACK_PROVIDER is set, automatically retries with fallback
+ * provider when the primary fails all retries.
  */
 export async function generateImage(
   runId: string,
   scene: Scene,
   outDir: string
 ): Promise<ImageResult> {
-  const provider = (getSetting("IMAGE_PROVIDER") || "69labs").toLowerCase();
+  const provider = (getSetting("IMAGE_PROVIDER") || "69labs").toLowerCase().trim();
+  const fallback = (getSetting("IMAGE_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const styleSuffix = getPrompt("image_prompt");
   const finalPrompt = `${scene.visual_prompt}, ${styleSuffix}`;
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.png`;
   const filePath = path.join(outDir, fileName);
 
-  log(runId, "info", `Image scene #${scene.index} (${provider})`, {
+  // Try primary provider first
+  try {
+    const result = await generateWithProvider(runId, provider, finalPrompt, filePath, scene.index);
+    return result;
+  } catch (primaryErr) {
+    // If no fallback configured, or fallback is same as primary, just throw
+    if (!fallback || fallback === "off" || fallback === provider) {
+      throw primaryErr;
+    }
+
+    // Try fallback provider
+    const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+    log(runId, "warn",
+      `Image #${scene.index} primary provider (${provider}) failed: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
+      { stage: "image" }
+    );
+
+    try {
+      const result = await generateWithProvider(runId, fallback, finalPrompt, filePath, scene.index);
+      log(runId, "success", `Image #${scene.index} recovered via fallback provider (${fallback})`, { stage: "image" });
+      return result;
+    } catch (fallbackErr) {
+      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      log(runId, "error",
+        `Image #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
+        { stage: "image" }
+      );
+      // Throw original error so the pipeline retry wrapper can handle it
+      throw primaryErr;
+    }
+  }
+}
+
+/** Run image generation with a specific provider. */
+async function generateWithProvider(
+  runId: string,
+  provider: string,
+  prompt: string,
+  filePath: string,
+  sceneIndex: number,
+): Promise<ImageResult> {
+  const fileName = path.basename(filePath);
+
+  log(runId, "info", `Image scene #${sceneIndex} (${provider})`, {
     stage: "image",
-    data: { provider, prompt: finalPrompt.slice(0, 120) },
+    data: { provider, prompt: prompt.slice(0, 120) },
   });
 
   if (provider === "69labs") {
-    const jobId = await labs69Image(runId, finalPrompt, filePath);
+    const jobId = await labs69Image(runId, prompt, filePath);
     log(runId, "success", `Image saved: ${fileName}`, { stage: "image" });
     return { filePath, providerJobId: jobId, provider };
   }
+  if (provider === "kieai") {
+    await kieaiImage(runId, prompt, filePath);
+    log(runId, "success", `Image saved: ${fileName}`, { stage: "image" });
+    return { filePath, provider };
+  }
   if (provider === "replicate") {
-    await replicateImage(finalPrompt, filePath);
+    await replicateImage(prompt, filePath);
   } else if (provider === "openai") {
-    await openaiImage(finalPrompt, filePath);
+    await openaiImage(prompt, filePath);
   } else if (provider === "fal") {
-    await falImage(finalPrompt, filePath);
+    await falImage(prompt, filePath);
   } else {
     throw new Error(`Unknown image provider: ${provider}`);
   }
@@ -110,9 +162,69 @@ async function labs69Image(runId: string, prompt: string, outPath: string): Prom
       }
 
       if (attempt < MAX_ATTEMPTS) {
+        // If this was a rate/credit limit, clear the batch key so the retry
+        // picks a different API key instead of hammering the same one
+        if (/429|rate limit|credit limit/i.test(msg)) {
+          setBatchKey(null);
+        }
         // Exponential backoff to let slots thaw
         const delay = 5000 * attempt;
         log(runId, "warn", `image attempt ${attempt}/${MAX_ATTEMPTS} failed: ${msg.slice(0, 200)} — retry in ${delay}ms`, {
+          stage: "image",
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+async function kieaiImage(runId: string, prompt: string, outPath: string) {
+  const aspectRatio = getSetting("IMAGE_RATIO") || "16:9";
+
+  // Use the dedicated KieAI default model if set, otherwise map from primary
+  const kieDefault = getSetting("KIEAI_DEFAULT_IMAGE_MODEL");
+  let model: string;
+  if (kieDefault) {
+    model = kieDefault;
+  } else {
+    const rawModel = getSetting("IMAGE_MODEL") || "";
+    const KIE_IMAGE_MODEL_MAP: Record<string, string> = {
+      "nano-banana-pro": "flux-kontext-pro",
+      "nano-banana": "flux-kontext-pro",
+      "imagen-4": "flux-kontext-pro",
+      "seedream-4.5": "flux-kontext-pro",
+      "flux-2-pro": "flux-kontext-pro",
+    };
+    model = KIE_IMAGE_MODEL_MAP[rawModel] || rawModel || "flux-kontext-pro";
+  }
+
+  const MAX_ATTEMPTS = 3;
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const taskId = await createKieImageTask({
+        prompt,
+        model,
+        aspectRatio,
+        runId,
+      });
+      log(
+        runId,
+        "debug",
+        `KieAI image task ${taskId.slice(0, 8)}… (model=${model}, aspect=${aspectRatio}, attempt=${attempt})`,
+        { stage: "image" }
+      );
+      const data = await pollKieTask(taskId, runId, "image");
+      await downloadKieTask(data, outPath);
+      return;
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      if (attempt < MAX_ATTEMPTS) {
+        const delay = 5000 * attempt;
+        log(runId, "warn", `KieAI image attempt ${attempt}/${MAX_ATTEMPTS} failed: ${msg.slice(0, 200)} — retry in ${delay}ms`, {
           stage: "image",
         });
         await new Promise((r) => setTimeout(r, delay));
