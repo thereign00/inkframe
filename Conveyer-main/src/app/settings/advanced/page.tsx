@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { appAlert } from "@/lib/dialogs";
 import { GroupCard, dropMaskedSecrets, type Group } from "../_GroupCard";
 
 /**
@@ -338,7 +339,7 @@ export default function AdvancedSettingsPage() {
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({} as { error?: string }));
-      alert(`Save failed: ${j.error || r.statusText}`);
+      await appAlert(`Save failed: ${j.error || r.statusText}`);
       return;
     }
     setSaved(true);

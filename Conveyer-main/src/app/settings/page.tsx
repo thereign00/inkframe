@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { appAlert, appConfirm } from "@/lib/dialogs";
 import { GroupCard, dropMaskedSecrets, type Group } from "./_GroupCard";
 
 /**
@@ -81,13 +82,15 @@ export default function SettingsPage() {
     const params = new URLSearchParams(window.location.search);
     const gd = params.get("gdrive");
     if (!gd) return;
-    if (gd === "connected") {
-      alert("Google Drive connected ✓");
-    } else if (gd === "error") {
-      alert(`Google Drive connect failed: ${params.get("reason") || "unknown"}`);
-    }
-    // Strip the query param so the alert doesn't repeat on reload
-    window.history.replaceState({}, "", "/settings");
+    (async () => {
+      if (gd === "connected") {
+        await appAlert("Google Drive connected ✓");
+      } else if (gd === "error") {
+        await appAlert(`Google Drive connect failed: ${params.get("reason") || "unknown"}`);
+      }
+      // Strip the query param so the alert doesn't repeat on reload
+      window.history.replaceState({}, "", "/settings");
+    })();
   }, []);
 
   async function save() {
@@ -99,7 +102,7 @@ export default function SettingsPage() {
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({} as { error?: string }));
-      alert(`Save failed: ${j.error || r.statusText}`);
+      await appAlert(`Save failed: ${j.error || r.statusText}`);
       return;
     }
     setSaved(true);
@@ -108,14 +111,14 @@ export default function SettingsPage() {
   }
 
   async function disconnectGdrive() {
-    if (!confirm("Disconnect Google Drive? You'll need to re-authorize to upload again.")) return;
+    if (!(await appConfirm("Disconnect Google Drive? You'll need to re-authorize to upload again."))) return;
     await fetch("/api/gdrive/disconnect", { method: "POST" });
     load(revealing);
   }
 
-  function connectGdrive() {
+  async function connectGdrive() {
     if (!gdrive?.credentialsConfigured) {
-      alert("Fill GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET, then click 'Save all changes' before connecting.");
+      await appAlert("Fill GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET, then click 'Save all changes' before connecting.");
       return;
     }
     window.location.href = "/api/gdrive/oauth/start";

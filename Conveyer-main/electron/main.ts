@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, shell, ipcMain, dialog, Menu } from "electron";
 import path from "path";
 import { spawn, ChildProcess } from "child_process";
 import net from "net";
@@ -204,6 +204,18 @@ function createWindow(port: number) {
     if (url.startsWith("http")) shell.openExternal(url);
     return { action: "deny" };
   });
+
+  // ── Right-click context menu (Cut / Copy / Paste / Select All) ───
+  mainWindow.webContents.on("context-menu", (_event, params) => {
+    const menu = Menu.buildFromTemplate([
+      { role: "cut", enabled: params.editFlags.canCut },
+      { role: "copy", enabled: params.editFlags.canCopy },
+      { role: "paste", enabled: params.editFlags.canPaste },
+      { type: "separator" },
+      { role: "selectAll", enabled: params.editFlags.canSelectAll },
+    ]);
+    menu.popup();
+  });
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -273,4 +285,100 @@ ipcMain.handle("license:info", () => {
 ipcMain.handle("license:deactivate", () => {
   clearStoredLicense();
   log("[main] License deactivated by user");
+});
+
+// ── Dialog IPC handlers (window.prompt / alert don't work in Electron) ──
+
+ipcMain.handle("dialog:prompt", async (_ev, message: string, defaultValue?: string) => {
+  if (!mainWindow) return null;
+  // Use an input dialog via Electron's showMessageBox + a BrowserWindow trick
+  // For simplicity, use a small modal window with an input field
+  return new Promise<string | null>((resolve) => {
+    const promptWin = new BrowserWindow({
+      parent: mainWindow!,
+      modal: true,
+      width: 420,
+      height: 200,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      show: false,
+      frame: false,
+      backgroundColor: "#1a1a2e",
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, "preload.js"),
+      },
+    });
+
+    const defVal = (defaultValue || "").replace(/"/g, "&quot;");
+    const msg = message.replace(/"/g, "&quot;");
+    const html = `<!DOCTYPE html>
+<html><head><style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;padding:24px;display:flex;flex-direction:column;height:100vh}
+  label{font-size:14px;margin-bottom:8px;display:block}
+  input{width:100%;padding:10px 12px;border:1px solid #333;border-radius:6px;background:#0d0d1a;color:#fff;font-size:14px;outline:none}
+  input:focus{border-color:#6c63ff}
+  .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:auto;padding-top:16px}
+  button{padding:8px 20px;border:none;border-radius:6px;font-size:13px;cursor:pointer}
+  .ok{background:#6c63ff;color:#fff}
+  .ok:hover{background:#5a52d5}
+  .cancel{background:#2a2a3e;color:#aaa}
+  .cancel:hover{background:#333}
+</style></head><body>
+  <label>${msg}</label>
+  <input id="v" value="${defVal}" autofocus />
+  <div class="btns">
+    <button class="cancel" onclick="close_('')">Cancel</button>
+    <button class="ok" onclick="close_(document.getElementById('v').value)">OK</button>
+  </div>
+  <script>
+    const {ipcRenderer}=require('electron');
+    function close_(val){window.__result=val;window.close()}
+    document.getElementById('v').addEventListener('keydown',e=>{
+      if(e.key==='Enter')close_(document.getElementById('v').value);
+      if(e.key==='Escape')close_('');
+    });
+  </script>
+</body></html>`;
+
+    promptWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    promptWin.once("ready-to-show", () => promptWin.show());
+    promptWin.on("closed", () => {
+      resolve((promptWin as any).__result || null);
+    });
+
+    // Listen for the result via a workaround: use webContents executeJavaScript
+    promptWin.webContents.on("will-prevent-unload", () => {});
+    promptWin.on("close", () => {
+      promptWin.webContents.executeJavaScript("window.__result || null")
+        .then((val) => resolve(val || null))
+        .catch(() => resolve(null));
+    });
+  });
+});
+
+ipcMain.handle("dialog:alert", async (_ev, message: string) => {
+  if (!mainWindow) return;
+  await dialog.showMessageBox(mainWindow, {
+    type: "info",
+    title: "Inkframe",
+    message,
+    buttons: ["OK"],
+  });
+});
+
+ipcMain.handle("dialog:confirm", async (_ev, message: string) => {
+  if (!mainWindow) return false;
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "question",
+    title: "Inkframe",
+    message,
+    buttons: ["OK", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  return response === 0;
 });

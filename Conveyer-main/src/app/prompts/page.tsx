@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { appAlert } from "@/lib/dialogs";
 
 const META: { name: string; label: string; help: string; rows: number }[] = [
   {
@@ -72,7 +73,7 @@ export default function PromptsPage() {
     const r = await fetch("/api/channels/active", { method: "PUT" });
     if (!r.ok) {
       const j = await r.json().catch(() => ({} as { error?: string }));
-      alert(j.error || "Failed to save channel.");
+      await appAlert(j.error || "Failed to save channel.");
       return;
     }
     setChannelSaved(true);

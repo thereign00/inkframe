@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { appAlert } from "@/lib/dialogs";
 
 // Rough estimate: TTS narration averages ~150 words per minute
 const WORDS_PER_MINUTE = 150;
@@ -137,7 +138,7 @@ export default function NewRunPage() {
         body: JSON.stringify({ title, script }),
       });
       if (!r.ok) {
-        alert(`Error: ${await r.text()}`);
+        await appAlert(`Error: ${await r.text()}`);
         return;
       }
       const data = (await r.json()) as { id: string };

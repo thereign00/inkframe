@@ -26,4 +26,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   /** Get current license info */
   getLicenseInfo: (): Promise<{ licensed: boolean; email?: string } | null> =>
     ipcRenderer.invoke("license:info"),
+
+  // ── Dialogs (window.prompt/alert don't work in Electron) ──────────
+
+  /** Native prompt dialog — returns user input or null if cancelled */
+  prompt: (message: string, defaultValue?: string): Promise<string | null> =>
+    ipcRenderer.invoke("dialog:prompt", message, defaultValue),
+
+  /** Native alert dialog */
+  alert: (message: string): Promise<void> =>
+    ipcRenderer.invoke("dialog:alert", message),
+
+  /** Native confirm dialog — returns true/false */
+  confirm: (message: string): Promise<boolean> =>
+    ipcRenderer.invoke("dialog:confirm", message),
 });

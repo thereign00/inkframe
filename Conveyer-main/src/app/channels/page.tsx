@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { appPrompt, appAlert, appConfirm } from "@/lib/dialogs";
 
 interface ChannelSummary {
   id: string;
@@ -391,7 +392,7 @@ export default function ChannelsPage() {
   }
 
   async function createChannel() {
-    const name = window.prompt("New channel name:");
+    const name = await appPrompt("New channel name:");
     if (!name?.trim()) return;
     setBusy(true);
     try {
@@ -402,7 +403,7 @@ export default function ChannelsPage() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({} as { error?: string }));
-        alert(j.error || "Failed to create channel.");
+        await appAlert(j.error || "Failed to create channel.");
         return;
       }
       showFlash("Created ✓");
@@ -413,7 +414,7 @@ export default function ChannelsPage() {
   }
 
   async function duplicateChannel(ch: ChannelSummary) {
-    const name = window.prompt("Name for the copy:", `${ch.name} (copy)`);
+    const name = await appPrompt("Name for the copy:", `${ch.name} (copy)`);
     if (!name?.trim()) return;
     setBusy(true);
     try {
@@ -424,7 +425,7 @@ export default function ChannelsPage() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({} as { error?: string }));
-        alert(j.error || "Failed to duplicate.");
+        await appAlert(j.error || "Failed to duplicate.");
         return;
       }
       showFlash("Duplicated ✓");
@@ -435,7 +436,7 @@ export default function ChannelsPage() {
   }
 
   async function renameChannel(ch: ChannelSummary) {
-    const name = window.prompt("Rename channel:", ch.name);
+    const name = await appPrompt("Rename channel:", ch.name);
     if (!name?.trim() || name.trim() === ch.name) return;
     setBusy(true);
     try {
@@ -446,7 +447,7 @@ export default function ChannelsPage() {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({} as { error?: string }));
-        alert(j.error || "Failed to rename.");
+        await appAlert(j.error || "Failed to rename.");
         return;
       }
       showFlash("Renamed ✓");
@@ -457,13 +458,13 @@ export default function ChannelsPage() {
   }
 
   async function deleteChannel(ch: ChannelSummary) {
-    if (!window.confirm(`Delete channel "${ch.name}"? This cannot be undone.`)) return;
+    if (!(await appConfirm(`Delete channel "${ch.name}"? This cannot be undone.`))) return;
     setBusy(true);
     try {
       const r = await fetch(`/api/channels/${ch.id}`, { method: "DELETE" });
       if (!r.ok) {
         const j = await r.json().catch(() => ({} as { error?: string }));
-        alert(j.error || "Failed to delete.");
+        await appAlert(j.error || "Failed to delete.");
         return;
       }
       if (expandedId === ch.id) {

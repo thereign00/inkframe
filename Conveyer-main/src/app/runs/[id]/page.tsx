@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, use } from "react";
+import { appAlert } from "@/lib/dialogs";
 
 interface LogEntry {
   id?: number;
@@ -108,11 +109,11 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       const r = await fetch(`/api/runs/${id}/open-folder`, { method: "POST" });
       const j = await r.json();
       if (!r.ok) {
-        alert(`Failed to open folder: ${j.error}\n\nPath: ${j.runDir || ""}`);
+        await appAlert(`Failed to open folder: ${j.error}\n\nPath: ${j.runDir || ""}`);
         return;
       }
     } catch (e) {
-      alert(`Error: ${(e as Error).message}`);
+      await appAlert(`Error: ${(e as Error).message}`);
     }
   }
 
