@@ -12,7 +12,7 @@
     "electron:rebuild": "npx @electron/rebuild -m . --which-module better-sqlite3",
     "electron:build": "tsc -p electron/tsconfig.json",
     "electron:dev": "npm run build && npm run electron:build && node scripts/prepare-electron.mjs && electron .",
-    "predist": "npm run build && npm run electron:build && node scripts/prepare-electron.mjs",
+    "predist": "npm rebuild better-sqlite3 && npm run build && npm run electron:build && node scripts/prepare-electron.mjs",
     "dist": "electron-builder --win",
     "dist:publish": "electron-builder --win --publish always"
   },
