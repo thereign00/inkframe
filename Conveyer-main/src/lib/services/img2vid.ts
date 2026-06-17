@@ -4,13 +4,16 @@ import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
-import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey } from "./labs69";
+import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
 
 /**
  * Turns a still image into a short ~5-second video clip.
  * Supports 69labs (default, uses imageJobId chaining to skip re-upload),
  * Replicate Kling/WAN, and fal.ai.
+ *
+ * Key failover: if 69labs is the provider and has multiple keys, tries
+ * each key before falling back to the fallback provider.
  *
  * If ANIMATION_FALLBACK_PROVIDER is set, automatically retries with fallback
  * when the primary provider fails.
@@ -32,9 +35,9 @@ export async function animateScene(
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp4`;
   const filePath = path.join(outDir, fileName);
 
-  // Try primary provider first
+  // Try primary provider first (with key failover for 69labs)
   try {
-    await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
+    await runAnimWithKeyFailover(runId, provider, scene, imagePath, filePath, options);
     log(runId, "success", `Animation done: ${fileName}`, { stage: "animate" });
     return filePath;
   } catch (primaryErr) {
@@ -45,12 +48,12 @@ export async function animateScene(
 
     const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
     log(runId, "warn",
-      `Anim #${scene.index} primary (${provider}) failed: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
+      `Anim #${scene.index} primary (${provider}) failed all keys: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
       { stage: "animate" }
     );
 
     try {
-      await runAnimProvider(runId, fallback, scene, imagePath, filePath, options);
+      await runAnimWithKeyFailover(runId, fallback, scene, imagePath, filePath, options);
       log(runId, "success", `Animation #${scene.index} recovered via fallback (${fallback}): ${fileName}`, { stage: "animate" });
       return filePath;
     } catch (fallbackErr) {
@@ -60,6 +63,50 @@ export async function animateScene(
         { stage: "animate" }
       );
       throw primaryErr;
+    }
+  }
+}
+
+/**
+ * Wraps runAnimProvider with key-failover logic for 69labs.
+ */
+async function runAnimWithKeyFailover(
+  runId: string,
+  provider: string,
+  scene: Scene,
+  imagePath: string,
+  filePath: string,
+  options: { providerJobId?: string; imageProvider?: string },
+): Promise<void> {
+  if (provider !== "69labs" || getKeyList().length <= 1) {
+    return runAnimProvider(runId, provider, scene, imagePath, filePath, options);
+  }
+
+  const failedKeys = new Set<string>();
+  let lastErr: Error | undefined;
+
+  while (true) {
+    try {
+      return await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+
+      const currentKey = getKeyList().find((k) => !failedKeys.has(k));
+      if (currentKey) failedKeys.add(currentKey);
+
+      const nextKey = tryNextKey(failedKeys);
+      if (!nextKey) {
+        log(runId, "warn",
+          `Anim #${scene.index} exhausted all ${failedKeys.size} 69labs keys`,
+          { stage: "animate" }
+        );
+        throw lastErr;
+      }
+
+      log(runId, "info",
+        `Anim #${scene.index} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
+        { stage: "animate" }
+      );
     }
   }
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { getSetting } from "../settings";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
-import { createTtsJob, pollJob, downloadJob } from "./labs69";
+import { createTtsJob, pollJob, downloadJob, tryNextKey, getKeyList } from "./labs69";
 import { createKieTtsTask, pollKieTask, downloadKieTask } from "./kieai";
 
 export interface TtsResult {
@@ -14,8 +14,13 @@ export interface TtsResult {
 }
 
 /**
- * Synthesizes one scene. Supports 69labs (default), ElevenLabs (direct), OpenAI TTS.
- * Each file is sceneN.mp3 in the scene directory.
+ * Synthesizes one scene. Supports 69labs, KieAI, ElevenLabs (direct), OpenAI TTS.
+ *
+ * Key failover: if 69labs is the TTS provider and has multiple keys, tries
+ * each key before falling back to TTS_FALLBACK_PROVIDER.
+ *
+ * Provider fallback: if TTS_FALLBACK_PROVIDER is set, retries with
+ * the fallback provider when primary (all keys) fails.
  */
 export async function synthesizeScene(
   runId: string,
@@ -23,6 +28,7 @@ export async function synthesizeScene(
   outDir: string
 ): Promise<TtsResult> {
   const provider = (getSetting("TTS_PROVIDER") || "69labs").toLowerCase();
+  const fallback = (getSetting("TTS_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp3`;
   const filePath = path.join(outDir, fileName);
 
@@ -35,6 +41,89 @@ export async function synthesizeScene(
     await generateSilence(filePath, silenceDur);
     return { filePath, durationSec: silenceDur };
   }
+
+  // Try primary provider (with key failover for 69labs)
+  try {
+    return await synthesizeWithKeyFailover(runId, provider, scene, filePath);
+  } catch (primaryErr) {
+    // If no fallback configured, or same as primary, just throw
+    if (!fallback || fallback === "off" || fallback === provider) {
+      throw primaryErr;
+    }
+
+    const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+    log(runId, "warn",
+      `TTS #${scene.index} primary (${provider}) failed all keys: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
+      { stage: "tts" }
+    );
+
+    try {
+      const result = await synthesizeWithKeyFailover(runId, fallback, scene, filePath);
+      log(runId, "success", `TTS #${scene.index} recovered via fallback provider (${fallback})`, { stage: "tts" });
+      return result;
+    } catch (fallbackErr) {
+      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      log(runId, "error",
+        `TTS #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
+        { stage: "tts" }
+      );
+      throw primaryErr;
+    }
+  }
+}
+
+/**
+ * Wraps synthesizeWithProvider with key-failover logic for 69labs.
+ */
+async function synthesizeWithKeyFailover(
+  runId: string,
+  provider: string,
+  scene: Scene,
+  filePath: string,
+): Promise<TtsResult> {
+  if (provider !== "69labs" || getKeyList().length <= 1) {
+    return synthesizeWithProvider(runId, provider, scene, filePath);
+  }
+
+  const failedKeys = new Set<string>();
+  let lastErr: Error | undefined;
+
+  while (true) {
+    try {
+      return await synthesizeWithProvider(runId, provider, scene, filePath);
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+
+      const currentKey = getKeyList().find((k) => !failedKeys.has(k));
+      if (currentKey) failedKeys.add(currentKey);
+
+      const nextKey = tryNextKey(failedKeys);
+      if (!nextKey) {
+        log(runId, "warn",
+          `TTS #${scene.index} exhausted all ${failedKeys.size} 69labs keys`,
+          { stage: "tts" }
+        );
+        throw lastErr;
+      }
+
+      log(runId, "info",
+        `TTS #${scene.index} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
+        { stage: "tts" }
+      );
+    }
+  }
+}
+
+/**
+ * Run TTS with a specific provider and validate output.
+ */
+async function synthesizeWithProvider(
+  runId: string,
+  provider: string,
+  scene: Scene,
+  filePath: string,
+): Promise<TtsResult> {
+  const fileName = path.basename(filePath);
 
   log(runId, "info", `TTS scene #${scene.index} (${provider})`, {
     stage: "tts",
@@ -58,14 +147,10 @@ export async function synthesizeScene(
   }
   const stats = fs.statSync(filePath);
   // Sanity check: a valid MP3 with speech should be at least 1 KB.
-  // Anything smaller is likely corrupt, empty, or an error HTML page.
   if (stats.size < 1024) {
-    // Remove the broken file so it doesn't confuse retries
     try { fs.unlinkSync(filePath); } catch { /* ignore */ }
     throw new Error(`TTS output too small (${stats.size} bytes) — likely failed or empty audio`);
   }
-  // Rough estimate: 16 KB/s for 128kbps mp3 — good enough for assembly.
-  // Real duration is read via ffprobe in video-assemble.ts.
   const durationSec = Math.max(1, stats.size / 16000);
 
   log(runId, "success", `TTS done: ${fileName} (~${durationSec.toFixed(1)}s)`, {

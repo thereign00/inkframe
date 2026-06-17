@@ -93,6 +93,28 @@ const pool = {
     const c = this.active.get(key) ?? 0;
     if (c > 0) this.active.set(key, c - 1);
   },
+
+  /**
+   * Pick the least-loaded key that ISN'T in the exclusion set.
+   * Used for key-failover: when one key fails, try the next one.
+   * Returns null if no eligible keys remain.
+   */
+  pickExcluding(exclude: Set<string>): string | null {
+    const keys = this.list().filter((k) => !exclude.has(k));
+    if (keys.length === 0) return null;
+
+    let best = keys[0];
+    let bestCount = this.active.get(best) ?? 0;
+    for (let i = 1; i < keys.length; i++) {
+      const c = this.active.get(keys[i]) ?? 0;
+      if (c < bestCount) {
+        best = keys[i];
+        bestCount = c;
+      }
+    }
+    this.active.set(best, bestCount + 1);
+    return best;
+  },
 };
 
 /** Number of configured keys. Exposed for UI / pipeline concurrency scaling. */
@@ -103,6 +125,19 @@ export function getKeyCount(): number {
 /** Get the list of configured API keys. Used by pipeline for batch assignment. */
 export function getKeyList(): string[] {
   return pool.list();
+}
+
+/**
+ * Key-failover helper. Tries to pick an alternate 69labs key that isn't in
+ * the `failedKeys` set. If found, sets it as the batch key and returns it.
+ * Returns null if no eligible keys remain (caller should fall back to another provider).
+ */
+export function tryNextKey(failedKeys: Set<string>): string | null {
+  const next = pool.pickExcluding(failedKeys);
+  if (next) {
+    _batchKey = next;
+  }
+  return next;
 }
 
 // ── Job ↔ key binding ───────────────────────────────────────────────────────

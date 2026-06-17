@@ -4,7 +4,7 @@ import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
 import type { Scene } from "./scene-split";
-import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey } from "./labs69";
+import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieImageTask, pollKieTask, downloadKieTask } from "./kieai";
 
 export interface ImageResult {
@@ -19,8 +19,12 @@ export interface ImageResult {
 /**
  * Generates one illustration for a scene.
  * Supports 69labs (default), Replicate (Flux), OpenAI Images, fal.ai.
- * If IMAGE_FALLBACK_PROVIDER is set, automatically retries with fallback
- * provider when the primary fails all retries.
+ *
+ * Key failover: if 69labs is the primary provider and has multiple keys,
+ * tries each key before falling back to the fallback provider.
+ *
+ * Provider fallback: if IMAGE_FALLBACK_PROVIDER is set, retries with
+ * the fallback provider when primary (all keys) fails.
  */
 export async function generateImage(
   runId: string,
@@ -34,9 +38,9 @@ export async function generateImage(
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.png`;
   const filePath = path.join(outDir, fileName);
 
-  // Try primary provider first
+  // Try primary provider first (with key failover for 69labs)
   try {
-    const result = await generateWithProvider(runId, provider, finalPrompt, filePath, scene.index);
+    const result = await generateWithKeyFailover(runId, provider, finalPrompt, filePath, scene.index);
     return result;
   } catch (primaryErr) {
     // If no fallback configured, or fallback is same as primary, just throw
@@ -47,12 +51,12 @@ export async function generateImage(
     // Try fallback provider
     const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
     log(runId, "warn",
-      `Image #${scene.index} primary provider (${provider}) failed: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
+      `Image #${scene.index} primary provider (${provider}) failed all keys: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
       { stage: "image" }
     );
 
     try {
-      const result = await generateWithProvider(runId, fallback, finalPrompt, filePath, scene.index);
+      const result = await generateWithKeyFailover(runId, fallback, finalPrompt, filePath, scene.index);
       log(runId, "success", `Image #${scene.index} recovered via fallback provider (${fallback})`, { stage: "image" });
       return result;
     } catch (fallbackErr) {
@@ -61,8 +65,56 @@ export async function generateImage(
         `Image #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
         { stage: "image" }
       );
-      // Throw original error so the pipeline retry wrapper can handle it
       throw primaryErr;
+    }
+  }
+}
+
+/**
+ * Wraps generateWithProvider with key-failover logic for 69labs.
+ * If the provider is 69labs and there are multiple keys, tries each key
+ * in sequence until one works or all are exhausted.
+ */
+async function generateWithKeyFailover(
+  runId: string,
+  provider: string,
+  prompt: string,
+  filePath: string,
+  sceneIndex: number,
+): Promise<ImageResult> {
+  if (provider !== "69labs" || getKeyList().length <= 1) {
+    return generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
+  }
+
+  // Multi-key failover for 69labs
+  const failedKeys = new Set<string>();
+  let lastErr: Error | undefined;
+
+  while (true) {
+    try {
+      return await generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+
+      // Track which key failed (current batch key)
+      const currentKey = getKeyList().find((k) => !failedKeys.has(k));
+      if (currentKey) failedKeys.add(currentKey);
+
+      // Try next available key
+      const nextKey = tryNextKey(failedKeys);
+      if (!nextKey) {
+        // No more keys to try
+        log(runId, "warn",
+          `Image #${sceneIndex} exhausted all ${failedKeys.size} 69labs keys`,
+          { stage: "image" }
+        );
+        throw lastErr;
+      }
+
+      log(runId, "info",
+        `Image #${sceneIndex} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
+        { stage: "image" }
+      );
     }
   }
 }

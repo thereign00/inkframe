@@ -27,6 +27,7 @@ export const SETTING_KEYS = [
 
   // ── Text-to-Speech ────────────────────────────────────────────────
   "TTS_PROVIDER",            // 69labs | kieai | elevenlabs | openai
+  "TTS_FALLBACK_PROVIDER",   // Fallback if primary TTS fails (off | 69labs | kieai | elevenlabs | openai)
   "TTS_VOICE_PROVIDER",      // For 69labs: edgetts | elevenlabs | voice-clone
   "TTS_VOICE_ID",            // Voice id (ElevenLabs / Edge / clone UUID)
   "TTS_MODEL",               // e.g. eleven_multilingual_v2
@@ -223,6 +224,7 @@ export const DEFAULTS: Record<SettingKey, string> = {
   TTS_AUTO_PAUSE: "1",
   TTS_PAUSE_DURATION: "0.4",
   TTS_PAUSE_FREQUENCY: "1",
+  TTS_FALLBACK_PROVIDER: "",
 
   // Images — KieAI uses flux-kontext-pro by default; 69labs uses nano-banana-pro
   IMAGE_PROVIDER: "kieai",
@@ -286,7 +288,7 @@ export function seedDefaults() {
  */
 export const CHANNEL_SCOPED_KEYS: SettingKey[] = [
   "IMAGE_PROVIDER", "IMAGE_FALLBACK_PROVIDER", "IMAGE_MODEL", "IMAGE_RATIO", "IMAGE_RESOLUTION",
-  "TTS_PROVIDER", "TTS_VOICE_PROVIDER", "TTS_VOICE_ID", "TTS_MODEL", "TTS_SPLIT_TYPE",
+  "TTS_PROVIDER", "TTS_FALLBACK_PROVIDER", "TTS_VOICE_PROVIDER", "TTS_VOICE_ID", "TTS_MODEL", "TTS_SPLIT_TYPE",
   "TTS_SPEED", "TTS_STABILITY", "TTS_SIMILARITY_BOOST", "TTS_STYLE", "TTS_USE_SPEAKER_BOOST",
   "TTS_AUTO_PAUSE", "TTS_PAUSE_DURATION", "TTS_PAUSE_FREQUENCY",
   "ANIMATION_PROVIDER", "ANIMATION_FALLBACK_PROVIDER", "ANIMATION_MODEL", "ANIMATION_RATIO_PERCENT",
