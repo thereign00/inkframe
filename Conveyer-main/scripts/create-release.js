@@ -40,12 +40,12 @@ function api(method, urlPath, body) {
 }
 
 async function main() {
-  // 1. Delete all draft releases for this version
-  console.log("Cleaning up old drafts...");
+  // 1. Delete all releases for this version (draft or published)
+  console.log("Cleaning up old releases...");
   const { data: releases } = await api("GET", `/repos/${OWNER}/${REPO}/releases`);
   for (const rel of releases) {
-    if (rel.tag_name === `v${VERSION}` && rel.draft) {
-      console.log(`  Deleting draft ${rel.id}...`);
+    if (rel.tag_name === `v${VERSION}`) {
+      console.log(`  Deleting release ${rel.id} (${rel.draft ? "draft" : "published"})...`);
       await api("DELETE", `/repos/${OWNER}/${REPO}/releases/${rel.id}`);
     }
   }

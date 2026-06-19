@@ -30,15 +30,35 @@ type JobStatus = "PENDING" | "PROCESSING" | "FINALIZING" | "COMPLETED" | "FAILED
 
 // ── Key pool ────────────────────────────────────────────────────────────────
 
-/**
- * Batch-level key hint.  When set, pool.pick() always returns this key
- * instead of load-balancing.  The pipeline sets this per-batch so every
- * job in a batch uses the same account — critical for img→vid chaining
- * since 69labs only lets the creating account access a job.
- */
-let _batchKey: string | null = null;
+import { AsyncLocalStorage } from "node:async_hooks";
 
-/** Set the preferred key for the current batch, or null to use round-robin. */
+/**
+ * Per-scene key context using AsyncLocalStorage.
+ * Each scene runs inside its own async context with an isolated key,
+ * so concurrent scenes don't overwrite each other's key assignment.
+ */
+const _keyStorage = new AsyncLocalStorage<{ key: string }>();
+
+/**
+ * Run a function with a specific 69labs key bound to its async context.
+ * All pool.pick() calls within this context will use this key.
+ * This is the correct way to assign keys per-scene in concurrent batches.
+ */
+export function withSceneKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return _keyStorage.run({ key }, fn);
+}
+
+/**
+ * Update the key in the current async context (used for failover).
+ * Only works inside a withSceneKey() context.
+ */
+export function setContextKey(key: string) {
+  const store = _keyStorage.getStore();
+  if (store) store.key = key;
+}
+
+/** Legacy setter — still used for single-key setups and repair passes. */
+let _batchKey: string | null = null;
 export function setBatchKey(key: string | null) {
   _batchKey = key;
 }
@@ -58,18 +78,25 @@ const pool = {
       .filter(Boolean);
   },
 
-  /** Pick the key for the current job. Respects the batch hint when set. */
+  /** Pick the key for the current job. Checks async context first, then global fallback. */
   pick(): string {
     const keys = this.list();
     if (keys.length === 0) throw new Error("LABS69_API_KEY is not set (Settings)");
 
-    // If a batch key is set and it's a valid key, use it
+    // 1. Check AsyncLocalStorage context (per-scene key)
+    const store = _keyStorage.getStore();
+    if (store?.key && keys.includes(store.key)) {
+      this.active.set(store.key, (this.active.get(store.key) ?? 0) + 1);
+      return store.key;
+    }
+
+    // 2. Check legacy global batch key
     if (_batchKey && keys.includes(_batchKey)) {
       this.active.set(_batchKey, (this.active.get(_batchKey) ?? 0) + 1);
       return _batchKey;
     }
 
-    // Otherwise, pick the least-loaded key
+    // 3. Otherwise, pick the least-loaded key
     let best = keys[0];
     let bestCount = this.active.get(best) ?? 0;
     for (let i = 1; i < keys.length; i++) {
@@ -129,12 +156,15 @@ export function getKeyList(): string[] {
 
 /**
  * Key-failover helper. Tries to pick an alternate 69labs key that isn't in
- * the `failedKeys` set. If found, sets it as the batch key and returns it.
+ * the `failedKeys` set. If found, updates the current async context and returns it.
  * Returns null if no eligible keys remain (caller should fall back to another provider).
  */
 export function tryNextKey(failedKeys: Set<string>): string | null {
   const next = pool.pickExcluding(failedKeys);
   if (next) {
+    // Update the async context so subsequent calls in this scene use the new key
+    setContextKey(next);
+    // Also update legacy global as fallback
     _batchKey = next;
   }
   return next;

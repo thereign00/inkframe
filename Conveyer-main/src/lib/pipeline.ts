@@ -10,7 +10,7 @@ import { synthesizeScene, type TtsResult } from "./services/tts";
 import { generateImage, type ImageResult } from "./services/image-gen";
 import { animateScene, pickScenesToAnimate } from "./services/img2vid";
 import { assembleVideo, type AssembleInput } from "./services/video-assemble";
-import { getKeyCount, getKeyList, setBatchKey } from "./services/labs69";
+import { getKeyCount, getKeyList, setBatchKey, withSceneKey } from "./services/labs69";
 import { syncRunToDrive } from "./services/run-upload";
 import { downloadReusedClip } from "./services/reuse";
 import { syncActiveChannelToLive } from "./channels";
@@ -144,33 +144,50 @@ export async function runPipeline(runId: string, script: string) {
 
       checkCancelled(runId);
 
-      // ── Per-scene key assignment (round-robin) ───────────────────────
-      // Instead of assigning one key to the whole batch, distribute scenes
-      // across ALL 69labs keys so they work simultaneously (5:4 split etc).
-      // The batch key is set inside processScene() before each scene's
-      // generation calls, preserving img→vid chaining.
+      // ── Per-scene key assignment (block split) ────────────────────────
+      // Split scenes across keys in blocks: Key 1 gets scenes 0-4,
+      // Key 2 gets scenes 5-9, etc. Each scene runs inside withSceneKey()
+      // so its key is isolated — concurrent scenes can't overwrite each other.
       const keys69 = getKeyList();
+      const scenesPerKey = keys69.length > 0
+        ? Math.ceil(batch.length / keys69.length)
+        : batch.length;
 
       log(
         runId, "info",
         `▶ Batch ${batchNum}/${totalBatches}: scenes #${batchStart}–#${batchEnd - 1} (${batch.length} scenes)` +
-        (keys69.length > 1 ? ` · round-robin across ${keys69.length} keys` : ""),
+        (keys69.length > 1
+          ? ` · split across ${keys69.length} keys (${scenesPerKey} scenes/key)`
+          : ""),
         { stage: "pipeline" }
       );
 
       // Process all scenes in this batch concurrently
       const batchPromises = batch.map((scene, batchIdx) => {
-        // Round-robin key assignment: use the global scene index for even distribution
-        const sceneKey = keys69.length > 0
-          ? keys69[(batchStart + batchIdx) % keys69.length]
-          : null;
+        // Block-based key: first N scenes → Key 1, next N → Key 2, etc.
+        const keyIndex = keys69.length > 0
+          ? Math.min(Math.floor(batchIdx / scenesPerKey), keys69.length - 1)
+          : -1;
+        const sceneKey = keyIndex >= 0 ? keys69[keyIndex] : null;
 
-        return processScene(
+        if (sceneKey) {
+          log(runId, "debug",
+            `Scene #${scene.index} → key …${sceneKey.slice(-6)} (block ${keyIndex + 1}/${keys69.length})`,
+            { stage: "pipeline" }
+          );
+        }
+
+        // Wrap in withSceneKey so the key is isolated per async context
+        const runScene = () => processScene(
           runId, scene,
           { audioDir, imgDir, animDir },
           { limitTts, limitImg, limitAnim },
-          { animTargets, reuseMap, sceneKey },
+          { animTargets, reuseMap },
         );
+
+        return sceneKey
+          ? withSceneKey(sceneKey, runScene)
+          : runScene();
       });
 
       // Wait for EVERY scene in the batch to complete
@@ -337,18 +354,8 @@ async function processScene(
   opts: {
     animTargets: Set<number>;
     reuseMap: Record<string, string>;
-    sceneKey: string | null;
   },
 ): Promise<SceneResult> {
-  // Set the per-scene 69labs key (round-robin distribution)
-  if (opts.sceneKey) {
-    setBatchKey(opts.sceneKey);
-    log(runId, "debug",
-      `Scene #${scene.index} → key …${opts.sceneKey.slice(-6)}`,
-      { stage: "pipeline" }
-    );
-  }
-
   // TTS and Image run concurrently, each with their own retries
   const [audio, image] = await Promise.all([
     limits.limitTts(() =>
