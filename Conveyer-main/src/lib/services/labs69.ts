@@ -336,6 +336,31 @@ async function postJsonWithKey<T>(
       throw new Error(`69labs POST ${path} 403: ${errText.slice(0, 400)}`);
     }
 
+    // ── 409 Conflict — duplicate job already in progress ──────────────
+    // 69labs rejects TTS/image jobs when an identical request is already
+    // running on the same account.  Wait briefly and retry — the existing
+    // job will finish soon, then our retry will succeed.
+    if (r.status === 409) {
+      const errText = await r.text();
+      const isDuplicate = /duplicate|already in progress/i.test(errText);
+      if (isDuplicate) {
+        const MAX_DUP_RETRIES = 12; // ~1 minute total
+        if (rateRetry < MAX_DUP_RETRIES) {
+          rateRetry++;
+          const waitMs = 5000 + Math.random() * 5000; // 5-10s jitter
+          if (ctx) {
+            log(ctx.runId, "info",
+              `69labs duplicate job (409) on key …${key.slice(-6)} — waiting ${Math.round(waitMs / 1000)}s for existing job to finish (${rateRetry}/${MAX_DUP_RETRIES})`,
+              { stage: ctx.stage }
+            );
+          }
+          await sleep(waitMs);
+          continue;
+        }
+      }
+      throw new Error(`69labs POST ${path} 409: ${errText.slice(0, 400)}`);
+    }
+
     throw new Error(`69labs POST ${path} ${r.status}: ${(await r.text()).slice(0, 400)}`);
   }
 }
