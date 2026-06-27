@@ -69,6 +69,7 @@ async function main() {
   }
   console.log(`✓ Release created: ${data.html_url}`);
   const uploadUrl = data.upload_url;
+  const releaseId = data.id;
 
   // 4. Upload small files first
   const distDir = path.join(process.cwd(), "dist-electron");
@@ -109,7 +110,7 @@ async function main() {
     console.log(`  ✓ ${asset.file} (${result.status})`);
   }
 
-  // 5. Upload the big exe using streaming with progress and keepalive
+  // 5. Upload the big exe using streaming with progress, keepalive, and auto-retry
   const exeFile = `Inkframe-Setup-${VERSION}.exe`;
   const exePath = path.join(distDir, exeFile);
   if (!fs.existsSync(exePath)) { console.error(`✗ ${exeFile} not found!`); process.exit(1); }
@@ -118,58 +119,90 @@ async function main() {
   console.log(`\nUploading ${exeFile} (${(stat.size / 1e9).toFixed(2)} GB)...`);
   console.log("This will take a while. Progress logged every 30s.");
 
-  const url = new URL(uploadUrl.replace("{?name,label}", `?name=${encodeURIComponent(exeFile)}`));
-  
-  await new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: url.hostname,
-      path: url.pathname + url.search,
-      method: "POST",
-      headers: {
-        Authorization: `token ${TOKEN}`,
-        "User-Agent": "inkframe",
-        "Content-Type": "application/octet-stream",
-        "Content-Length": stat.size,
-      },
-      // No timeout - let it run as long as needed
-    }, (res) => {
-      let d = "";
-      res.on("data", c => d += c);
-      res.on("end", () => {
-        if (res.statusCode === 201) {
-          console.log(`\n✓ ${exeFile} uploaded successfully!`);
-          resolve();
-        } else {
-          console.error(`\n✗ Upload failed (${res.statusCode}): ${d.slice(0, 300)}`);
-          reject(new Error("Upload failed"));
+  const MAX_UPLOAD_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+    try {
+      // Before each attempt, delete any partial asset from previous failed upload
+      if (attempt > 1) {
+        console.log(`\n  Retry ${attempt}/${MAX_UPLOAD_RETRIES} — cleaning up partial asset...`);
+        try {
+          const { data: assets } = await api("GET", `/repos/${OWNER}/${REPO}/releases/${releaseId}/assets`);
+          for (const a of assets) {
+            if (a.name === exeFile) {
+              await api("DELETE", `/repos/${OWNER}/${REPO}/releases/assets/${a.id}`);
+              console.log(`  Deleted partial asset (${(a.size / 1e6).toFixed(1)} MB)`);
+            }
+          }
+        } catch (cleanupErr) {
+          console.warn(`  Cleanup warning: ${cleanupErr.message}`);
         }
-      });
-    });
-    
-    req.on("error", (err) => {
-      console.error(`\n✗ Upload error: ${err.message}`);
-      reject(err);
-    });
-
-    // Stream file with progress
-    const stream = fs.createReadStream(exePath, { highWaterMark: 1024 * 1024 }); // 1MB chunks
-    let uploaded = 0;
-    let lastLog = Date.now();
-    
-    stream.on("data", (chunk) => {
-      uploaded += chunk.length;
-      const now = Date.now();
-      if (now - lastLog > 30000) { // Log every 30s
-        const pct = ((uploaded / stat.size) * 100).toFixed(1);
-        const mbUploaded = (uploaded / 1e6).toFixed(0);
-        const mbTotal = (stat.size / 1e6).toFixed(0);
-        console.log(`  ${pct}% (${mbUploaded}/${mbTotal} MB)`);
-        lastLog = now;
+        // Wait before retry
+        const waitSec = 10 * attempt;
+        console.log(`  Waiting ${waitSec}s before retry...`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
       }
-    });
-    
-    stream.pipe(req);
-  });
+
+      const url = new URL(uploadUrl.replace("{?name,label}", `?name=${encodeURIComponent(exeFile)}`));
+      
+      await new Promise((resolve, reject) => {
+        const req = https.request({
+          hostname: url.hostname,
+          path: url.pathname + url.search,
+          method: "POST",
+          headers: {
+            Authorization: `token ${TOKEN}`,
+            "User-Agent": "inkframe",
+            "Content-Type": "application/octet-stream",
+            "Content-Length": stat.size,
+          },
+        }, (res) => {
+          let d = "";
+          res.on("data", c => d += c);
+          res.on("end", () => {
+            if (res.statusCode === 201) {
+              console.log(`\n✓ ${exeFile} uploaded successfully!`);
+              resolve();
+            } else {
+              console.error(`\n✗ Upload failed (${res.statusCode}): ${d.slice(0, 300)}`);
+              reject(new Error(`Upload failed: ${res.statusCode}`));
+            }
+          });
+        });
+        
+        req.on("error", (err) => {
+          console.error(`\n✗ Upload error: ${err.message}`);
+          reject(err);
+        });
+
+        // Stream file with progress
+        const stream = fs.createReadStream(exePath, { highWaterMark: 1024 * 1024 }); // 1MB chunks
+        let uploaded = 0;
+        let lastLog = Date.now();
+        
+        stream.on("data", (chunk) => {
+          uploaded += chunk.length;
+          const now = Date.now();
+          if (now - lastLog > 30000) { // Log every 30s
+            const pct = ((uploaded / stat.size) * 100).toFixed(1);
+            const mbUploaded = (uploaded / 1e6).toFixed(0);
+            const mbTotal = (stat.size / 1e6).toFixed(0);
+            console.log(`  ${pct}% (${mbUploaded}/${mbTotal} MB)`);
+            lastLog = now;
+          }
+        });
+        
+        stream.pipe(req);
+      });
+
+      // If we get here, upload succeeded — break out of retry loop
+      break;
+    } catch (uploadErr) {
+      if (attempt === MAX_UPLOAD_RETRIES) {
+        throw new Error(`Upload failed after ${MAX_UPLOAD_RETRIES} attempts: ${uploadErr.message}`);
+      }
+      console.log(`  Upload attempt ${attempt} failed: ${uploadErr.message}`);
+    }
+  }
 
   console.log(`\n✓ All done! Release: https://github.com/${OWNER}/${REPO}/releases/tag/v${VERSION}`);
 }

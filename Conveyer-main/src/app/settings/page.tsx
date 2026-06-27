@@ -46,6 +46,48 @@ const MAIN_GROUPS: Group[] = [
       },
     ],
   },
+  {
+    title: "TTS Provider",
+    subtitle: "Choose which service generates the voice narration. Switch providers here if one is having issues.",
+    fields: [
+      {
+        key: "TTS_PROVIDER",
+        label: "TTS Provider",
+        desc: "Which service to use for text-to-speech. '69labs' routes through 69labs.vip, 'kieai' routes through Kie AI, 'elevenlabs' calls ElevenLabs directly with your own API key, 'off' disables TTS (silent videos).",
+        examples: "69labs / kieai / elevenlabs / off",
+      },
+      {
+        key: "TTS_FALLBACK_PROVIDER",
+        label: "Fallback Provider",
+        desc: "If the primary TTS provider fails (all keys exhausted), retry with this provider before giving up. Leave empty or 'off' to disable fallback.",
+        examples: "kieai / 69labs / elevenlabs / off",
+      },
+    ],
+  },
+  {
+    title: "ElevenLabs Direct",
+    subtitle: "Only needed when TTS Provider is set to 'elevenlabs'. Calls ElevenLabs API directly with your own key — no middleman.",
+    fields: [
+      {
+        key: "ELEVENLABS_API_KEY",
+        label: "ElevenLabs API Key",
+        desc: "Your personal ElevenLabs API key. Get it from elevenlabs.io → Profile → API Keys.",
+        examples: "sk_...",
+      },
+      {
+        key: "ELEVENLABS_VOICE_ID",
+        label: "Voice ID",
+        desc: "The ElevenLabs voice ID to use. Find it in your ElevenLabs Voice Library — click a voice and copy the ID from the URL or settings panel.",
+        examples: "21m00Tcm4TlvDq8ikWAM (Rachel) / pNInz6obpgDQGcFmaJgB (Adam) / or any custom voice ID",
+      },
+      {
+        key: "ELEVENLABS_MODEL",
+        label: "Model",
+        desc: "Which ElevenLabs model to use. 'eleven_multilingual_v2' is the highest quality. 'eleven_flash_v2_5' is faster but slightly lower quality.",
+        examples: "eleven_multilingual_v2 / eleven_flash_v2_5",
+      },
+    ],
+  },
 ];
 
 interface GdriveStatus {

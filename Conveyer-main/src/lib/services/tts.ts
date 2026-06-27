@@ -280,9 +280,10 @@ function clamp(n: number, min: number, max: number): number {
 
 async function elevenLabs(text: string, outPath: string) {
   const apiKey = getSetting("ELEVENLABS_API_KEY");
-  if (!apiKey) throw new Error("ELEVENLABS_API_KEY is not set");
-  const voiceId = getSetting("TTS_VOICE_ID") || "21m00Tcm4TlvDq8ikWAM";
-  const model = getSetting("TTS_MODEL") || "eleven_multilingual_v2";
+  if (!apiKey) throw new Error("ELEVENLABS_API_KEY is not set — add your key in Settings → ElevenLabs Direct");
+  // Dedicated ElevenLabs settings, with fallback to shared TTS settings
+  const voiceId = getSetting("ELEVENLABS_VOICE_ID") || getSetting("TTS_VOICE_ID") || "21m00Tcm4TlvDq8ikWAM";
+  const model = getSetting("ELEVENLABS_MODEL") || getSetting("TTS_MODEL") || "eleven_multilingual_v2";
 
   const resp = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,

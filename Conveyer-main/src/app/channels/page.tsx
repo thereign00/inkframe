@@ -697,6 +697,7 @@ export default function ChannelsPage() {
                     const PROVIDER_LABELS: Record<string, string> = {
                       kieai: "⚡ KieAI",
                       "69labs": "🔬 69labs",
+                      elevenlabs: "🎤 ElevenLabs",
                       off: "🚫 Off",
                     };
 
@@ -769,9 +770,9 @@ export default function ChannelsPage() {
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           {provBtn("🎙️ TTS", ttsProv, (p) =>
                             updateSingle("TTS_PROVIDER", p, p !== "off" ? {
-                              TTS_VOICE_ID: p === "kieai" ? "DTKMou8ccj1ZaWGBiotd" : "Rachel",
+                              TTS_VOICE_ID: p === "kieai" ? "DTKMou8ccj1ZaWGBiotd" : p === "elevenlabs" ? "" : "Rachel",
                             } : {}),
-                            ["kieai", "69labs", "off"]
+                            ["kieai", "69labs", "elevenlabs", "off"]
                           )}
                           {provBtn("🖼️ Images", imgProv, (p) =>
                             updateSingle("IMAGE_PROVIDER", p, {
@@ -874,7 +875,7 @@ export default function ChannelsPage() {
                     <input
                       type="text"
                       className="input"
-                      value={editSettings.TTS_VOICE_ID ?? ((editSettings.IMAGE_PROVIDER || "kieai") === "kieai" ? "DTKMou8ccj1ZaWGBiotd" : "Rachel")}
+                      value={editSettings.TTS_VOICE_ID ?? ((editSettings.TTS_PROVIDER || "kieai") === "kieai" ? "DTKMou8ccj1ZaWGBiotd" : "Rachel")}
                       onChange={(e) => setEditSettings((prev) => ({ ...prev, TTS_VOICE_ID: e.target.value }))}
                       onBlur={(e) => updateChannelVoice(ch, e.target.value)}
                       onKeyDown={(e) => {
@@ -883,7 +884,13 @@ export default function ChannelsPage() {
                           (e.target as HTMLInputElement).blur();
                         }
                       }}
-                      placeholder="Rachel"
+                      placeholder={
+                        (editSettings.TTS_PROVIDER || "kieai") === "elevenlabs"
+                          ? "ElevenLabs voice ID from Settings"
+                          : (editSettings.TTS_PROVIDER || "kieai") === "kieai"
+                            ? "Rachel"
+                            : "Rachel"
+                      }
                       style={{
                         flex: "1 1 180px",
                         maxWidth: 280,
@@ -896,9 +903,11 @@ export default function ChannelsPage() {
                       }}
                     />
                     <span style={{ fontSize: 11, color: "#5a5a70" }}>
-                      {(editSettings.IMAGE_PROVIDER || "kieai") === "kieai"
-                        ? "Use voice names: Rachel, Adam, Antoni, Bella, Josh, Sam, etc."
-                        : "Use ElevenLabs voice IDs or names"}
+                      {(editSettings.TTS_PROVIDER || "kieai") === "elevenlabs"
+                        ? "Uses your ElevenLabs API key + Voice ID from Settings → ElevenLabs Direct"
+                        : (editSettings.TTS_PROVIDER || "kieai") === "kieai"
+                          ? "Use voice names: Rachel, Adam, Antoni, Bella, Josh, Sam, etc."
+                          : "Use ElevenLabs voice IDs or names"}
                     </span>
                   </div>
                   )}

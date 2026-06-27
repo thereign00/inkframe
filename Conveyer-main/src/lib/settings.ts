@@ -11,6 +11,8 @@ export const SETTING_KEYS = [
 
   // ── Optional / backup providers ───────────────────────────────────
   "ELEVENLABS_API_KEY",      // direct ElevenLabs (without 69labs)
+  "ELEVENLABS_VOICE_ID",     // ElevenLabs voice ID (for direct ElevenLabs mode)
+  "ELEVENLABS_MODEL",        // ElevenLabs model (for direct ElevenLabs mode)
   "KIEAI_API_KEY",            // Kie AI — unified gateway (TTS + images + video)
   "REPLICATE_API_TOKEN",     // Replicate (Flux / Kling)
   "ANTHROPIC_API_KEY",       // Claude (alternative to Gemini)
@@ -190,6 +192,8 @@ export const DEFAULTS: Record<SettingKey, string> = {
 
   // Optional providers
   ELEVENLABS_API_KEY: "",
+  ELEVENLABS_VOICE_ID: "21m00Tcm4TlvDq8ikWAM", // Rachel
+  ELEVENLABS_MODEL: "eleven_multilingual_v2",
   KIEAI_API_KEY: "",
   REPLICATE_API_TOKEN: "",
   ANTHROPIC_API_KEY: "",
