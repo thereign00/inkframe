@@ -24,11 +24,7 @@ export interface AssembleInput {
  *  2. Concat all clips with xfade on the boundaries (smooth crossfade).
  *     - If TRANSITION_DURATION = 0 → simple concat without transitions.
  */
-export async function assembleVideo(
-  runId: string,
-  scenes: AssembleInput[],
-  outDir: string
-): Promise<string> {
+export function setupFfmpeg(): void {
   const userPath = getSetting("FFMPEG_PATH");
   let ffmpegPath = userPath;
 
@@ -52,6 +48,14 @@ export async function assembleVideo(
     const ffprobePath = ffmpegPath.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1");
     if (fs.existsSync(ffprobePath)) ffmpeg.setFfprobePath(ffprobePath);
   }
+}
+
+export async function assembleVideo(
+  runId: string,
+  scenes: AssembleInput[],
+  outDir: string
+): Promise<string> {
+  setupFfmpeg();
 
   const resolution = getSetting("VIDEO_RESOLUTION") || "1920x1080";
   const fps = Number(getSetting("VIDEO_FPS") || "30");
@@ -178,7 +182,8 @@ async function checkXfadeSupport(): Promise<boolean> {
 }
 
 /** Reads the exact audio duration via ffprobe. */
-function probeDuration(filePath: string): Promise<number> {
+export function probeDuration(filePath: string): Promise<number> {
+  setupFfmpeg();
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, data) => {
       if (err) return reject(err);
@@ -419,16 +424,23 @@ async function renderAnimatedClip(
 }
 
 /** Simple stream-copy concat (no transitions). */
-function concatSimple(clipPaths: string[], clipsDir: string, finalPath: string): Promise<void> {
-  const listFile = path.join(clipsDir, "concat.txt");
+export function concatSimple(clipPaths: string[], clipsDir: string, finalPath: string): Promise<void> {
+  setupFfmpeg();
+  const listFile = path.join(clipsDir, `concat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`);
   fs.writeFileSync(listFile, clipPaths.map((p) => `file '${p.replace(/\\/g, "/")}'`).join("\n"), "utf-8");
   return new Promise((resolve, reject) => {
     ffmpeg()
       .input(listFile)
       .inputOptions(["-f concat", "-safe 0"])
       .outputOptions(["-c copy"])
-      .on("error", reject)
-      .on("end", () => resolve())
+      .on("error", (err) => {
+        try { fs.unlinkSync(listFile); } catch {}
+        reject(err);
+      })
+      .on("end", () => {
+        try { fs.unlinkSync(listFile); } catch {}
+        resolve();
+      })
       .save(finalPath);
   });
 }

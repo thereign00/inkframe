@@ -158,12 +158,12 @@ async function generateWithProvider(
 }
 
 async function labs69Image(runId: string, prompt: string, outPath: string): Promise<string> {
-  const model = getSetting("IMAGE_MODEL") || undefined; // server default = imagen-4
+  const model = getSetting("IMAGE_MODEL") || "img-flux"; // 69labs name for Flux Schnell
   let aspectRatio = getSetting("IMAGE_RATIO") || undefined;
 
   // Imagen 4 only accepts 'square|portrait|landscape', not numeric ratios like '16:9'.
   // Safely map for the Imagen family.
-  const isImagen = !model || /^imagen/i.test(model);
+  const isImagen = /^imagen/i.test(model);
   if (isImagen && aspectRatio) {
     const map: Record<string, string> = {
       "16:9": "landscape", "21:9": "landscape", "4:3": "landscape", "3:2": "landscape",
@@ -173,7 +173,9 @@ async function labs69Image(runId: string, prompt: string, outPath: string): Prom
     aspectRatio = map[aspectRatio] ?? aspectRatio;
   }
 
-  const resolution = getSetting("IMAGE_RESOLUTION") || undefined;
+  // Flux models (img-flux, flux-schnell, etc.) don't support resolution selection
+  const isFlux = /flux/i.test(model);
+  const resolution = isFlux ? undefined : (getSetting("IMAGE_RESOLUTION") || undefined);
 
   // Retry: on timeout we cancel the stuck job first to free the concurrent slot.
   const MAX_ATTEMPTS = 3;

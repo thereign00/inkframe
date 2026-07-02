@@ -135,7 +135,9 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
           await Promise.all(
             missingVideo.map((s) =>
               limitAnim(() =>
-                animateScene(id, s, imgPath(s.index), animDir).catch((e) => {
+                animateScene(id, s, imgPath(s.index), animDir, {
+                  audioPath: fs.existsSync(audioPath(s.index)) ? audioPath(s.index) : undefined,
+                }).catch((e) => {
                   log(id, "warn",
                     `Failed to generate animation #${s.index}: ${(e as Error).message.slice(0, 200)}`,
                     { stage: "animate" }

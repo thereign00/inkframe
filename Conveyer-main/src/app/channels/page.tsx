@@ -267,7 +267,7 @@ export default function ChannelsPage() {
       IMAGE_PROVIDER: provider,
       ANIMATION_PROVIDER: provider,
       // Auto-set smart defaults for each provider
-      IMAGE_MODEL: isKie ? "flux-kontext-pro" : "flux-schnell",
+      IMAGE_MODEL: isKie ? "flux-kontext-pro" : "img-flux",
       ANIMATION_MODEL: isKie ? "veo3_fast" : "veo-video",
       TTS_VOICE_ID: isKie ? "DTKMou8ccj1ZaWGBiotd" : "Rachel",
     };
@@ -776,7 +776,7 @@ export default function ChannelsPage() {
                           )}
                           {provBtn("🖼️ Images", imgProv, (p) =>
                             updateSingle("IMAGE_PROVIDER", p, {
-                              IMAGE_MODEL: p === "kieai" ? "flux-kontext-pro" : "flux-schnell",
+                              IMAGE_MODEL: p === "kieai" ? "flux-kontext-pro" : "img-flux",
                             })
                           )}
                           {provBtn("🎬 Video", animProv, (p) =>

@@ -272,6 +272,7 @@ export async function runPipeline(runId: string, script: string) {
                 animateScene(runId, r.scene, curResult.imagePath, animDir, {
                   providerJobId: curResult._imgProviderJobId,
                   imageProvider: curResult._imgProvider,
+                  audioPath: curResult.audio?.filePath,
                 })
               );
               allResults[i] = { ...allResults[i], videoPath: newVideo };
@@ -390,6 +391,7 @@ async function processScene(
           animateScene(runId, scene, image.filePath, dirs.animDir, {
             providerJobId: image.providerJobId,
             imageProvider: image.provider,
+            audioPath: audio.filePath,
           })
         )
       );

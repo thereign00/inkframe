@@ -7,6 +7,8 @@ import type { Scene } from "./scene-split";
 import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
 
+import { probeDuration, concatSimple } from "./video-assemble";
+
 /**
  * Turns a still image into a short ~5-second video clip.
  * Supports 69labs (default, uses imageJobId chaining to skip re-upload),
@@ -18,6 +20,9 @@ import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
  * If ANIMATION_FALLBACK_PROVIDER is set, automatically retries with fallback
  * when the primary provider fails.
  *
+ * If audio duration exceeds 8s, generates multiple video clips to cover
+ * the narration without freezing, stitching them together.
+ *
  * Returns a path to the .mp4. If the provider is disabled, returns null
  * — the assembly step then falls back to Ken-Burns on the still image.
  */
@@ -26,7 +31,7 @@ export async function animateScene(
   scene: Scene,
   imagePath: string,
   outDir: string,
-  options: { providerJobId?: string; imageProvider?: string } = {}
+  options: { providerJobId?: string; imageProvider?: string; audioPath?: string } = {}
 ): Promise<string | null> {
   const provider = (getSetting("ANIMATION_PROVIDER") || "off").toLowerCase().trim();
   if (provider === "off") return null;
@@ -35,36 +40,78 @@ export async function animateScene(
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp4`;
   const filePath = path.join(outDir, fileName);
 
-  // Try primary provider first (with key failover for 69labs)
-  try {
-    await runAnimWithKeyFailover(runId, provider, scene, imagePath, filePath, options);
-    log(runId, "success", `Animation done: ${fileName}`, { stage: "animate" });
-    return filePath;
-  } catch (primaryErr) {
-    // If no fallback configured, or same as primary, just throw
-    if (!fallback || fallback === "off" || fallback === provider) {
-      throw primaryErr;
-    }
-
-    const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-    log(runId, "warn",
-      `Anim #${scene.index} primary (${provider}) failed all keys: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
-      { stage: "animate" }
-    );
-
+  let targetDurationSec = 8.0;
+  if (options.audioPath && fs.existsSync(options.audioPath)) {
     try {
-      await runAnimWithKeyFailover(runId, fallback, scene, imagePath, filePath, options);
-      log(runId, "success", `Animation #${scene.index} recovered via fallback (${fallback}): ${fileName}`, { stage: "animate" });
-      return filePath;
-    } catch (fallbackErr) {
-      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-      log(runId, "error",
-        `Anim #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
-        { stage: "animate" }
-      );
-      throw primaryErr;
+      targetDurationSec = await probeDuration(options.audioPath);
+    } catch {
+      try {
+        const stat = fs.statSync(options.audioPath);
+        targetDurationSec = Math.max(1, stat.size / 16000);
+      } catch {}
     }
   }
+
+  // Calculate number of ~8s video clips needed to cover speech duration
+  const numClips = Math.max(1, Math.ceil(targetDurationSec / 8.0));
+  if (numClips > 1) {
+    log(
+      runId,
+      "info",
+      `Scene #${scene.index} audio is ${targetDurationSec.toFixed(1)}s (longer than 8s) — generating ${numClips} video clips to cover speech`,
+      { stage: "animate" }
+    );
+  }
+
+  const runPart = async (partPath: string) => {
+    try {
+      await runAnimWithKeyFailover(runId, provider, scene, imagePath, partPath, options);
+    } catch (primaryErr) {
+      if (!fallback || fallback === "off" || fallback === provider) {
+        throw primaryErr;
+      }
+      const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+      log(runId, "warn",
+        `Anim #${scene.index} primary (${provider}) failed all keys: ${msg.slice(0, 150)} → switching to fallback (${fallback})`,
+        { stage: "animate" }
+      );
+      try {
+        await runAnimWithKeyFailover(runId, fallback, scene, imagePath, partPath, options);
+        log(runId, "success", `Animation #${scene.index} recovered via fallback (${fallback})`, { stage: "animate" });
+      } catch (fallbackErr) {
+        const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        log(runId, "error",
+          `Anim #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
+          { stage: "animate" }
+        );
+        throw primaryErr;
+      }
+    }
+  };
+
+  if (numClips === 1) {
+    await runPart(filePath);
+  } else {
+    const partPaths: string[] = [];
+    const partPromises: Promise<void>[] = [];
+    for (let i = 1; i <= numClips; i++) {
+      const pPath = path.join(outDir, `scene_${String(scene.index).padStart(3, "0")}_part${i}.mp4`);
+      partPaths.push(pPath);
+      partPromises.push(runPart(pPath));
+    }
+    try {
+      await Promise.all(partPromises);
+      await concatSimple(partPaths, outDir, filePath);
+      log(runId, "info", `Stitched ${numClips} video clips into ${fileName}`, { stage: "animate" });
+    } finally {
+      for (const p of partPaths) {
+        try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+      }
+    }
+  }
+
+  log(runId, "success", `Animation done: ${fileName}`, { stage: "animate" });
+  return filePath;
 }
 
 /**
