@@ -5,7 +5,7 @@ const path = require("path");
 const TOKEN = process.env.GH_TOKEN;
 const OWNER = "thereign00";
 const REPO = "inkframe";
-const VERSION = process.argv[2] || "1.0.2";
+const VERSION = process.argv[2] || "1.0.8";
 
 function api(method, urlPath, body) {
   return new Promise((resolve, reject) => {
@@ -58,7 +58,7 @@ async function main() {
   const { status, data } = await api("POST", `/repos/${OWNER}/${REPO}/releases`, {
     tag_name: `v${VERSION}`,
     name: `Inkframe v${VERSION}`,
-    body: `v${VERSION} — Fix dialogs, right-click context menu, text selection in Electron`,
+    body: `v${VERSION} — Multi-clip continuous animation for long narration, ElevenLabs direct provider option, 69labs flux model fix, and persistent channel settings fix`,
     draft: false,
     prerelease: false,
   });
