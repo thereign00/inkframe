@@ -1,6 +1,6 @@
 import db from "./db";
 
-export const PROMPT_NAMES = ["scene_split", "image_prompt", "animation_motion"] as const;
+export const PROMPT_NAMES = ["scene_split", "image_prompt", "animation_motion", "director_analysis"] as const;
 export type PromptName = (typeof PROMPT_NAMES)[number];
 
 export const DEFAULT_PROMPTS: Record<PromptName, string> = {
@@ -33,6 +33,7 @@ For EACH scene, return a JSON object with:
   • No architecture, machines, ships, cities, labs, equipment — only pure cosmic visuals.
   • Photorealistic style (style is appended later — just write the SUBSTANCE of the shot).
   • Describe MOTION too — Veo generates 8-second clips, so include subtle camera motion (slow zoom, drift, parallax). Example: "slow pan across surface of Mars at dawn, rust-colored dunes stretching to horizon".
+- "search_keywords": 2-4 clean, descriptive English visual search keywords (nouns and adjectives only, e.g. "Mars desert dawn" or "nebula outer space") suitable for querying stock footage libraries like Pixabay or Pexels.
 - "duration_hint_sec": approximate audio length (number, 3–9).
 
 Return a STRICTLY valid JSON array — no markdown, no explanations.
@@ -42,6 +43,15 @@ For a ~1500-word script expect ~80–130 scenes. For a ~700-word script expect ~
   image_prompt: `documentary photography, photoreal, real-world astronomy footage style, slightly hyper-real but grounded, NASA / ESA mission imagery, telescope-grade detail, natural color grading, dramatic cinematic lighting, 16:9 aspect, sharp focus, no text overlays, no watermarks, no logos, no humans, no people, no human figures, no faces, no astronauts in frame, no sci-fi stylization, no fantasy elements, no painterly artwork`,
 
   animation_motion: `subtle cinematic camera motion, gentle parallax, slow drift, photographic realism, natural ambient movement, no cartoon stylization, no jarring cuts, looks like a moving photograph`,
+
+  director_analysis: `You are an award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about.
+Output a concise Directorial Vision Breakdown that establishes:
+1. Overarching Visual Theme & Color Palette (what visual aesthetic unifies this script from beginning to end)
+2. Recurring Visual Motifs & Setting Continuity (how locations, themes, or objects should visually evolve across scenes)
+3. Tone & Mood Progression (how the lighting and emotional atmosphere shift from intro to middle to climax)
+4. Specific Cinematography Rules (camera movement style, subject focus, atmosphere)
+
+Keep your analysis structured, direct, and under 300 words. This breakdown will be fed directly into scene-generation AI to ensure 100% visual cohesion across the entire video.`,
 };
 
 const getStmt = db.prepare("SELECT content FROM prompts WHERE name = ?");

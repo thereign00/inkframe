@@ -1215,6 +1215,162 @@ export default function ChannelsPage() {
                       </div>
                     );
                   })()}
+
+                  {/* Director Mode toggle */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      marginBottom: 20,
+                      padding: "12px 16px",
+                      background: "linear-gradient(135deg, #14141d, #1a1a28)",
+                      borderRadius: 10,
+                      border: "1px solid #2a2a3a",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#b8b8c8", whiteSpace: "nowrap" }}>
+                      🎬 Director Mode
+                    </span>
+                    {([
+                      { value: "0", label: "Off — Standard Split", icon: "⏩" },
+                      { value: "1", label: "On — AI Director Vision", icon: "🎩" },
+                    ] as const).map((opt) => {
+                      const current = editSettings.DIRECTOR_MODE === "1" ? "1" : "0";
+                      const isSelected = current === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          onClick={() => updateChannelAnimation(ch, { DIRECTOR_MODE: opt.value === "1" ? "1" : "" })}
+                          disabled={busy}
+                          style={{
+                            padding: "5px 14px",
+                            borderRadius: 7,
+                            border: isSelected ? "1.5px solid #7c5cff" : "1px solid #2a2a3a",
+                            background: isSelected ? "linear-gradient(135deg, #2a1f5e, #3a2f7e)" : "transparent",
+                            color: isSelected ? "#c8b8ff" : "#6a6a80",
+                            fontWeight: isSelected ? 700 : 400,
+                            fontSize: 12,
+                            cursor: "pointer",
+                            transition: "all 0.2s",
+                          }}
+                        >
+                          {opt.icon} {opt.label}
+                        </button>
+                      );
+                    })}
+                    <span style={{ fontSize: 10, color: "#5a5a70" }}>
+                      {editSettings.DIRECTOR_MODE === "1"
+                        ? "AI Director analyzes full script first for 100% visual cohesion across scenes"
+                        : "Standard scene splitting without overarching directorial theme"}
+                    </span>
+                  </div>
+
+                  {/* Stock Footage Integration */}
+                  {(() => {
+                    const stockRatio = Number(editSettings.STOCK_FOOTAGE_RATIO_PERCENT ?? 0);
+                    const stockProvider = editSettings.STOCK_FOOTAGE_PROVIDER || "all";
+                    const isOff = stockRatio === 0 || stockProvider === "off";
+
+                    return (
+                      <div
+                        style={{
+                          marginBottom: 20,
+                          padding: "12px 16px",
+                          background: "linear-gradient(135deg, #14141d, #1a1a28)",
+                          borderRadius: 10,
+                          border: "1px solid #2a2a3a",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: isOff ? 0 : 12 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#b8b8c8", whiteSpace: "nowrap" }}>
+                            🎞️ Stock Footage
+                          </span>
+
+                          {/* Provider buttons */}
+                          {([
+                            { value: "off", label: "Off" },
+                            { value: "all", label: "All (Round-Robin)" },
+                            { value: "pexels", label: "Pexels" },
+                            { value: "pixabay", label: "Pixabay" },
+                          ] as const).map((opt) => {
+                            const isSelected = opt.value === "off" ? isOff : (!isOff && stockProvider === opt.value);
+                            return (
+                              <button
+                                key={opt.value}
+                                onClick={() => {
+                                  if (opt.value === "off") {
+                                    updateChannelAnimation(ch, { STOCK_FOOTAGE_RATIO_PERCENT: "0", STOCK_FOOTAGE_PROVIDER: "off" });
+                                  } else {
+                                    const newRatio = stockRatio === 0 ? "30" : String(stockRatio);
+                                    updateChannelAnimation(ch, { STOCK_FOOTAGE_RATIO_PERCENT: newRatio, STOCK_FOOTAGE_PROVIDER: opt.value });
+                                  }
+                                }}
+                                disabled={busy}
+                                style={{
+                                  padding: "5px 12px",
+                                  borderRadius: 7,
+                                  border: isSelected ? "1.5px solid #7c5cff" : "1px solid #2a2a3a",
+                                  background: isSelected ? "linear-gradient(135deg, #2a1f5e, #3a2f7e)" : "transparent",
+                                  color: isSelected ? "#c8b8ff" : "#6a6a80",
+                                  fontWeight: isSelected ? 700 : 400,
+                                  fontSize: 12,
+                                  cursor: "pointer",
+                                  transition: "all 0.2s",
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {!isOff && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+                            <span style={{ fontSize: 11, color: "#6a6a80", whiteSpace: "nowrap" }}>Ratio</span>
+                            <input
+                              type="range"
+                              min="10"
+                              max="100"
+                              step="10"
+                              value={stockRatio}
+                              onChange={(e) => setEditSettings((prev) => ({ ...prev, STOCK_FOOTAGE_RATIO_PERCENT: e.target.value }))}
+                              onMouseUp={(e) => updateChannelAnimation(ch, { STOCK_FOOTAGE_RATIO_PERCENT: (e.target as HTMLInputElement).value })}
+                              onTouchEnd={(e) => updateChannelAnimation(ch, { STOCK_FOOTAGE_RATIO_PERCENT: (e.target as HTMLInputElement).value })}
+                              style={{
+                                flex: 1,
+                                accentColor: "#7c5cff",
+                                cursor: "pointer",
+                              }}
+                            />
+                            <span
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 700,
+                                color: "#c8b8ff",
+                                minWidth: 38,
+                                textAlign: "center",
+                                background: "#1a1a28",
+                                border: "1px solid #3a3a50",
+                                borderRadius: 6,
+                                padding: "2px 6px",
+                              }}
+                            >
+                              {stockRatio}%
+                            </span>
+                          </div>
+                        )}
+
+                        <div style={{ fontSize: 11, color: "#5a5a70", marginTop: 8 }}>
+                          {isOff
+                            ? "100% AI generated clips and photos"
+                            : `${stockRatio}% of scenes use real stock video from ${stockProvider === "all" ? "Pexels & Pixabay" : stockProvider}`}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Keep video audio toggle */}
                   <div
                     style={{

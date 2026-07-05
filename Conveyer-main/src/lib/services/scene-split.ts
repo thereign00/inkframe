@@ -10,6 +10,7 @@ export interface Scene {
   index: number;
   text: string;
   visual_prompt: string;
+  search_keywords?: string;
   duration_hint_sec: number;
 }
 
@@ -36,7 +37,21 @@ const WORDS_PER_CHUNK = 3000;
  */
 export async function splitScript(runId: string, script: string): Promise<Scene[]> {
   const provider = (getSetting("SCENE_SPLIT_PROVIDER") || "google").toLowerCase();
-  const systemPrompt = getPrompt("scene_split");
+  let systemPrompt = getPrompt("scene_split");
+
+  if (getSetting("DIRECTOR_MODE") === "1") {
+    log(runId, "info", "Director Mode enabled — analyzing script story, themes, and cinematography...", { stage: "scene_split" });
+    try {
+      const vision = await analyzeDirectorVision(runId, provider, script);
+      if (vision && vision.trim()) {
+        log(runId, "success", "Director Mode: Directorial Vision Breakdown established and saved to director_vision.md", { stage: "scene_split" });
+        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts to maintain character continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}`;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(runId, "warn", `Director Mode analysis failed (${msg.slice(0, 150)}) — proceeding with standard scene split`, { stage: "scene_split" });
+    }
+  }
 
   const totalWords = script.trim().split(/\s+/).filter(Boolean).length;
   log(runId, "info", `Splitting script (${provider}) — ${totalWords} words`, {
@@ -160,6 +175,7 @@ async function splitOneChunk(
     index: sceneIndexOffset + i,
     text: String(s.text ?? ""),
     visual_prompt: String(s.visual_prompt ?? ""),
+    search_keywords: s.search_keywords ? String(s.search_keywords) : undefined,
     duration_hint_sec: Number(s.duration_hint_sec ?? 6),
   }));
 }
@@ -303,4 +319,55 @@ function extractJson(text: string): unknown {
     }
     throw new Error("Could not parse JSON from model response");
   }
+}
+
+async function analyzeDirectorVision(runId: string, provider: string, script: string): Promise<string> {
+  const directorPrompt = getPrompt("director_analysis");
+  let raw: string;
+  if (provider === "google") {
+    raw = await splitWithGeminiText(directorPrompt, script);
+  } else if (provider === "anthropic") {
+    raw = await splitWithClaude(directorPrompt, script);
+  } else {
+    return "";
+  }
+  try {
+    const runDir = getRunDir(runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, "director_vision.md"), raw, "utf-8");
+  } catch {}
+  return raw;
+}
+
+async function splitWithGeminiText(systemPrompt: string, script: string): Promise<string> {
+  const apiKey = getSetting("GOOGLE_API_KEY");
+  if (!apiKey) throw new Error("GOOGLE_API_KEY is not set (Settings)");
+  const model = getSetting("SCENE_SPLIT_MODEL") || "gemini-flash-latest";
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: "user", parts: [{ text: `Script:\n\n${script}` }] }],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 8000,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  if (resp.ok) {
+    const json = (await resp.json()) as {
+      candidates?: {
+        content?: { parts?: { text?: string }[] };
+      }[];
+    };
+    return json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  }
+  const errText = (await resp.text()).slice(0, 400);
+  throw new Error(`Gemini ${resp.status}: ${errText}`);
 }

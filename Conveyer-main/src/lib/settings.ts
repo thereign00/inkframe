@@ -13,6 +13,8 @@ export const SETTING_KEYS = [
   "ELEVENLABS_API_KEY",      // direct ElevenLabs (without 69labs)
   "ELEVENLABS_VOICE_ID",     // ElevenLabs voice ID (for direct ElevenLabs mode)
   "ELEVENLABS_MODEL",        // ElevenLabs model (for direct ElevenLabs mode)
+  "PIXABAY_API_KEY",         // Pixabay API key for stock footage
+  "PEXELS_API_KEY",          // Pexels API key for stock footage
   "KIEAI_API_KEY",            // Kie AI — unified gateway (TTS + images + video)
   "REPLICATE_API_TOKEN",     // Replicate (Flux / Kling)
   "ANTHROPIC_API_KEY",       // Claude (alternative to Gemini)
@@ -26,6 +28,7 @@ export const SETTING_KEYS = [
   // ── Scene splitting (LLM) ─────────────────────────────────────────
   "SCENE_SPLIT_PROVIDER",    // google | anthropic
   "SCENE_SPLIT_MODEL",       // e.g. gemini-flash-latest, claude-sonnet-4-6
+  "DIRECTOR_MODE",           // "1" to enable holistic story analysis before scene breakdown
 
   // ── Text-to-Speech ────────────────────────────────────────────────
   "TTS_PROVIDER",            // 69labs | kieai | elevenlabs | openai
@@ -65,6 +68,8 @@ export const SETTING_KEYS = [
   "ANIMATION_KEEP_VEO_AUDIO", // "1" to keep Veo's generated ambient audio
   "VIDEO_QUALITY",             // 480p | 720p | 1080p (for Runway/Minimax/Wan models)
   "KIEAI_DEFAULT_VIDEO_MODEL", // Default KieAI video model (used during fallback)
+  "STOCK_FOOTAGE_RATIO_PERCENT", // 0-100, percentage of scenes to use stock video
+  "STOCK_FOOTAGE_PROVIDER",    // all | pixabay | pexels | off
 
   // ── Video assembly (FFmpeg) ───────────────────────────────────────
   "VIDEO_RESOLUTION",        // e.g. 1920x1080
@@ -194,6 +199,8 @@ export const DEFAULTS: Record<SettingKey, string> = {
   ELEVENLABS_API_KEY: "",
   ELEVENLABS_VOICE_ID: "21m00Tcm4TlvDq8ikWAM", // Rachel
   ELEVENLABS_MODEL: "eleven_multilingual_v2",
+  PIXABAY_API_KEY: "",
+  PEXELS_API_KEY: "",
   KIEAI_API_KEY: "",
   REPLICATE_API_TOKEN: "",
   ANTHROPIC_API_KEY: "",
@@ -207,6 +214,7 @@ export const DEFAULTS: Record<SettingKey, string> = {
   // Scene split
   SCENE_SPLIT_PROVIDER: "google",
   SCENE_SPLIT_MODEL: "gemini-flash-latest",
+  DIRECTOR_MODE: "0",
 
   // TTS — default runs through KieAI's ElevenLabs gateway.
   // 69labs is still available as an alternative (set TTS_PROVIDER to "69labs").
@@ -248,6 +256,8 @@ export const DEFAULTS: Record<SettingKey, string> = {
   VIDEO_QUALITY: "720p",
   KIEAI_DEFAULT_IMAGE_MODEL: "flux-kontext-pro",
   KIEAI_DEFAULT_VIDEO_MODEL: "veo3_fast",
+  STOCK_FOOTAGE_RATIO_PERCENT: "0",
+  STOCK_FOOTAGE_PROVIDER: "all",
 
   // Video assembly
   VIDEO_RESOLUTION: "1920x1080",
@@ -299,4 +309,5 @@ export const CHANNEL_SCOPED_KEYS: SettingKey[] = [
   "ANIMATION_DISTRIBUTION", "ANIMATION_DURATION", "ANIMATION_KEEP_VEO_AUDIO",
   "VIDEO_QUALITY",
   "KIEAI_DEFAULT_IMAGE_MODEL", "KIEAI_DEFAULT_VIDEO_MODEL",
+  "DIRECTOR_MODE", "STOCK_FOOTAGE_RATIO_PERCENT", "STOCK_FOOTAGE_PROVIDER",
 ];

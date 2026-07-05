@@ -9,6 +9,7 @@ import { splitScript, type Scene } from "./services/scene-split";
 import { synthesizeScene, type TtsResult } from "./services/tts";
 import { generateImage, type ImageResult } from "./services/image-gen";
 import { animateScene, pickScenesToAnimate } from "./services/img2vid";
+import { pickScenesForStock, fetchStockVideo } from "./services/stock-video";
 import { assembleVideo, type AssembleInput } from "./services/video-assemble";
 import { getKeyCount, getKeyList, setBatchKey, withSceneKey } from "./services/labs69";
 import { syncRunToDrive } from "./services/run-upload";
@@ -120,13 +121,16 @@ export async function runPipeline(runId: string, script: string) {
         ? pickScenesToAnimate(scenes, animRatio, animDistribution)
         : new Set<number>();
 
+    const stockRatio = Number(getSetting("STOCK_FOOTAGE_RATIO_PERCENT") || "0");
+    const stockTargets = pickScenesForStock(scenes, stockRatio);
+
     const totalBatches = Math.ceil(scenes.length / BATCH_SIZE);
 
     log(
       runId, "info",
       `Processing ${scenes.length} scenes in ${totalBatches} batch${totalBatches > 1 ? "es" : ""} of ${BATCH_SIZE}. ` +
       `Concurrency: TTS=${ttsConcurrency}, Image=${imageConcurrency}, Anim=${animConcurrency}. ` +
-      `Animation: ${animTargets.size}/${scenes.length} scenes. Retries: ${MAX_RETRIES}/task.`,
+      `Animation: ${animTargets.size}/${scenes.length} scenes, Stock: ${stockTargets.size}/${scenes.length} scenes. Retries: ${MAX_RETRIES}/task.`,
       { stage: "pipeline" }
     );
 
@@ -182,7 +186,7 @@ export async function runPipeline(runId: string, script: string) {
           runId, scene,
           { audioDir, imgDir, animDir },
           { limitTts, limitImg, limitAnim },
-          { animTargets, reuseMap },
+          { animTargets, stockTargets, reuseMap },
         );
 
         return sceneKey
@@ -227,8 +231,8 @@ export async function runPipeline(runId: string, script: string) {
         fs.statSync(r.imagePath).size > 512;
       if (!imageOk) issues.push("image");
 
-      // Check video file (only if animation was expected for this scene)
-      const videoExpected = animTargets.has(idx) && r.videoPath;
+      // Check video file (only if animation or stock was expected for this scene)
+      const videoExpected = (animTargets.has(idx) || stockTargets.has(idx)) && r.videoPath;
       const videoOk = !videoExpected || (r.videoPath && fs.existsSync(r.videoPath) &&
         fs.statSync(r.videoPath).size > 512);
       if (!videoOk) issues.push("video");
@@ -265,21 +269,30 @@ export async function runPipeline(runId: string, script: string) {
 
           // Re-generate video if missing and was expected
           if (issues.includes("video")) {
-            log(runId, "info", `Repair #${idx}: re-generating animation (attempt ${attempt})`, { stage: "pipeline" });
+            log(runId, "info", `Repair #${idx}: re-generating video (attempt ${attempt})`, { stage: "pipeline" });
             try {
               const curResult = allResults[i];
-              const newVideo = await withRetry(runId, `Repair Anim #${idx}`, () =>
-                animateScene(runId, r.scene, curResult.imagePath, animDir, {
-                  providerJobId: curResult._imgProviderJobId,
-                  imageProvider: curResult._imgProvider,
-                  audioPath: curResult.audio?.filePath,
-                })
-              );
+              let newVideo: string | null = null;
+              if (stockTargets.has(idx)) {
+                const stockPath = path.join(animDir, `stock_scene_${String(idx).padStart(3, "0")}.mp4`);
+                newVideo = await withRetry(runId, `Repair Stock #${idx}`, () =>
+                  fetchStockVideo(runId, r.scene, stockPath)
+                );
+              }
+              if (!newVideo && animTargets.has(idx)) {
+                newVideo = await withRetry(runId, `Repair Anim #${idx}`, () =>
+                  animateScene(runId, r.scene, curResult.imagePath, animDir, {
+                    providerJobId: curResult._imgProviderJobId,
+                    imageProvider: curResult._imgProvider,
+                    audioPath: curResult.audio?.filePath,
+                  })
+                );
+              }
               allResults[i] = { ...allResults[i], videoPath: newVideo };
             } catch (animErr) {
               // Animation repair failure is non-fatal — Ken-Burns fallback
               const msg = animErr instanceof Error ? animErr.message : String(animErr);
-              log(runId, "warn", `Repair anim #${idx} failed, will use Ken-Burns: ${msg.slice(0, 150)}`, { stage: "pipeline" });
+              log(runId, "warn", `Repair video #${idx} failed, will use Ken-Burns: ${msg.slice(0, 150)}`, { stage: "pipeline" });
               allResults[i] = { ...allResults[i], videoPath: null };
             }
           }
@@ -354,6 +367,7 @@ async function processScene(
   },
   opts: {
     animTargets: Set<number>;
+    stockTargets: Set<number>;
     reuseMap: Record<string, string>;
   },
 ): Promise<SceneResult> {
@@ -381,6 +395,20 @@ async function processScene(
       videoPath = await downloadReusedClip(runId, scene, reuseFileId, dirs.animDir);
     } catch (e) {
       log(runId, "warn", `reuse #${scene.index} failed, generating fresh: ${(e as Error).message}`, { stage: "reuse" });
+    }
+  }
+
+  if (!videoPath && opts.stockTargets && opts.stockTargets.has(scene.index)) {
+    try {
+      const stockPath = path.join(dirs.animDir, `stock_scene_${String(scene.index).padStart(3, "0")}.mp4`);
+      videoPath = await limits.limitAnim(() =>
+        withRetry(runId, `Stock #${scene.index}`, () =>
+          fetchStockVideo(runId, scene, stockPath)
+        )
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(runId, "warn", `Stock #${scene.index} failed, falling back to AI/Ken-Burns: ${msg.slice(0, 150)}`, { stage: "animate" });
     }
   }
 

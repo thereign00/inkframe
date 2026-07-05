@@ -44,6 +44,16 @@ const MAIN_GROUPS: Group[] = [
         desc: "Alternative to 69labs — Kie AI (kie.ai) is a unified gateway for TTS, images, and video. Set TTS_PROVIDER / IMAGE_PROVIDER / ANIMATION_PROVIDER to 'kieai' in Advanced settings to use it. Both providers can coexist — just set the one you want per service.",
         examples: "Get your API key from https://kie.ai → Dashboard → API Keys",
       },
+      {
+        key: "PIXABAY_API_KEY",
+        desc: "Optional: Pixabay API key for sourcing high-quality free stock video footage. Used when Stock Footage Ratio is greater than 0% to blend real videos with AI generation.",
+        examples: "Get it free at https://pixabay.com/api/docs/ (requires account)",
+      },
+      {
+        key: "PEXELS_API_KEY",
+        desc: "Optional: Pexels API key for sourcing stock video footage. If both Pexels and Pixabay keys are provided, the pipeline will round-robin search across both libraries.",
+        examples: "Get it free at https://www.pexels.com/api/new/ (requires account)",
+      },
     ],
   },
   {

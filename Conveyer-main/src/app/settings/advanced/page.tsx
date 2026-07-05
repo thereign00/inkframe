@@ -44,6 +44,11 @@ const GROUPS: Group[] = [
         desc: "Specific model id. For Google, the `-latest` alias auto-tracks the current stable Flash. For Anthropic use the full model id.",
         examples: "gemini-flash-latest, gemini-2.5-flash, gemini-2.5-pro, claude-sonnet-4-6",
       },
+      {
+        key: "DIRECTOR_MODE",
+        desc: "When enabled (1), an award-winning AI director analyzes your entire script first to establish an overarching visual theme, recurring motifs, color palette, and mood progression. This directorial vision is injected into every scene for 100% visual cohesion.",
+        examples: "1 = enabled  ·  empty = disabled (standard scene split)",
+      },
     ],
   },
   {
@@ -188,6 +193,22 @@ const GROUPS: Group[] = [
         key: "ANIMATION_KEEP_VEO_AUDIO",
         desc: "Whether to keep the ambient audio Veo generates inside each clip. Default empty — we mute it so only the TTS narration is heard. Set `1` if you want Veo's atmospheric sound layered behind the narrator.",
         examples: "empty = mute  ·  1 = keep ambient audio",
+      },
+    ],
+  },
+  {
+    title: "Stock Footage Integration",
+    subtitle: "Blends real stock video clips from Pexels and Pixabay with AI-generated visuals to save credits and add realistic texture.",
+    fields: [
+      {
+        key: "STOCK_FOOTAGE_RATIO_PERCENT",
+        desc: "Percentage of scenes to source from stock footage libraries instead of AI generation. 0 = disabled (100% AI). 30 = 30% of scenes use real stock videos.",
+        examples: "0–100  ·  default 0",
+      },
+      {
+        key: "STOCK_FOOTAGE_PROVIDER",
+        desc: "Which library to search when sourcing stock video. `all` round-robins between Pexels and Pixabay. You must provide API keys on the main Settings page.",
+        examples: "all  /  pexels  /  pixabay  /  off",
       },
     ],
   },
