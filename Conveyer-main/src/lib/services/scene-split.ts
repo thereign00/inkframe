@@ -45,7 +45,7 @@ export async function splitScript(runId: string, script: string): Promise<Scene[
       const vision = await analyzeDirectorVision(runId, provider, script);
       if (vision && vision.trim()) {
         log(runId, "success", "Director Mode: Directorial Vision Breakdown established and saved to director_vision.md", { stage: "scene_split" });
-        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts to maintain character continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}`;
+        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts to maintain character continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nIMPORTANT NOTE: While visual_prompt must reflect this directorial vision, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.`;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

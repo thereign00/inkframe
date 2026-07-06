@@ -33,7 +33,7 @@ For EACH scene, return a JSON object with:
   • No architecture, machines, ships, cities, labs, equipment — only pure cosmic visuals.
   • Photorealistic style (style is appended later — just write the SUBSTANCE of the shot).
   • Describe MOTION too — Veo generates 8-second clips, so include subtle camera motion (slow zoom, drift, parallax). Example: "slow pan across surface of Mars at dawn, rust-colored dunes stretching to horizon".
-- "search_keywords": 2-4 clean, descriptive English visual search keywords (nouns and adjectives only, e.g. "Mars desert dawn" or "nebula outer space") suitable for querying stock footage libraries like Pixabay or Pexels.
+- "search_keywords": 1 to 3 literal, concrete English visual nouns representing tangible physical objects or actions (e.g. "coffee cup close", "man typing laptop", "rain window", "galaxy outer space"). MUST BE UNDER 3 WORDS. Do NOT use abstract concepts, full sentences, or poetic words, because stock libraries like Pexels/Pixabay only match basic literal nouns.
 - "duration_hint_sec": approximate audio length (number, 3–9).
 
 Return a STRICTLY valid JSON array — no markdown, no explanations.

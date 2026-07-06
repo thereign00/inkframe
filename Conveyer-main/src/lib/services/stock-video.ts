@@ -20,34 +20,54 @@ export function pickScenesForStock(scenes: Scene[], ratioPercent: number): Set<n
 }
 
 /**
- * Extracts clean search keywords from a scene for stock video API queries.
+ * Extracts clean, multi-tier search queries from a scene for stock video API queries.
  */
-function getCleanKeywords(scene: Scene): string {
-  if (scene.search_keywords && scene.search_keywords.trim().length > 0) {
-    return scene.search_keywords.trim();
-  }
-  // Strip common cinematic / instruction stop words
+function getSearchQueries(scene: Scene): string[] {
   const stopWords = new Set([
-    "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with", "by",
-    "slow", "pan", "zoom", "drift", "parallax", "cinematic", "photoreal", "photographic",
-    "realism", "camera", "motion", "style", "viewed", "through", "lens", "astronomy",
-    "channel", "focused", "important", "every", "scene", "must", "be", "genre",
-    "frame", "example", "subtle", "gentle", "natural", "ambient", "movement", "no",
-    "cartoon", "stylization", "jarring", "cuts", "looks", "like", "moving", "photograph",
-    "documentary", "photography", "grounded", "nasa", "esa", "mission", "imagery",
-    "detail", "color", "grading", "dramatic", "lighting", "aspect", "sharp", "focus",
+    "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with", "by", "from", "up", "down", "into", "over", "after",
+    "slow", "pan", "zoom", "drift", "parallax", "cinematic", "photoreal", "photographic", "high", "low", "angle", "wide", "close", "shot",
+    "realism", "camera", "motion", "style", "viewed", "through", "lens", "astronomy", "abstract", "concept", "conceptual", "symbolic",
+    "channel", "focused", "important", "every", "scene", "must", "be", "genre", "very", "extremely", "highly", "ultra", "super",
+    "frame", "example", "subtle", "gentle", "natural", "ambient", "movement", "no", "yes", "showing", "depicting", "featuring",
+    "cartoon", "stylization", "jarring", "cuts", "looks", "like", "moving", "photograph", "dramatic", "lighting", "aspect", "sharp",
+    "documentary", "photography", "grounded", "nasa", "esa", "mission", "imagery", "4k", "8k", "hd", "video", "footage", "background",
+    "detail", "color", "grading", "focus", "atmosphere", "mood", "feeling", "vibe", "aesthetic", "digital", "virtual",
     "overlays", "watermarks", "logos", "humans", "people", "figures", "faces", "astronauts",
   ]);
 
-  const words = scene.visual_prompt
-    .replace(/[^\w\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.toLowerCase())
-    .filter((w) => w.length > 2 && !stopWords.has(w));
+  function cleanString(str: string): string[] {
+    return str
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .map((w) => w.toLowerCase())
+      .filter((w) => w.length > 2 && !stopWords.has(w));
+  }
 
-  // Return top 3-4 distinct descriptive keywords
-  const distinct = Array.from(new Set(words));
-  return distinct.slice(0, 4).join(" ") || "space astronomy galaxy";
+  const queries: string[] = [];
+
+  if (scene.search_keywords && scene.search_keywords.trim().length > 0) {
+    const kwWords = cleanString(scene.search_keywords);
+    if (kwWords.length > 0) {
+      queries.push(kwWords.slice(0, 3).join(" "));
+      if (kwWords.length >= 2) {
+        const q2 = kwWords.slice(0, 2).join(" ");
+        if (!queries.includes(q2)) queries.push(q2);
+      }
+      if (!queries.includes(kwWords[0])) queries.push(kwWords[0]);
+    }
+  }
+
+  const vpWords = cleanString(scene.visual_prompt);
+  if (vpWords.length > 0) {
+    const q3 = vpWords.slice(0, 3).join(" ");
+    if (!queries.includes(q3)) queries.push(q3);
+    if (vpWords.length >= 2) {
+      const q2 = vpWords.slice(0, 2).join(" ");
+      if (!queries.includes(q2)) queries.push(q2);
+    }
+  }
+
+  return queries.length > 0 ? queries : ["nature landscape"];
 }
 
 /**
@@ -161,61 +181,60 @@ export async function fetchStockVideo(
     return null;
   }
 
-  const query = getCleanKeywords(scene);
+  const queries = getSearchQueries(scene);
   const ratio = getSetting("IMAGE_RATIO") || "16:9";
   const orientation = getOrientation(ratio);
 
-  log(runId, "info", `Searching stock footage for scene #${scene.index} [query: '${query}']...`, { stage: "animate" });
+  log(runId, "info", `Searching stock footage for scene #${scene.index} [queries: ${queries.map(q => `'${q}'`).join(", ")}]...`, { stage: "animate" });
 
-  const tryPexels = async (): Promise<string | null> => {
+  const tryPexels = async (query: string): Promise<string | null> => {
     if (!pexelsKey) return null;
     try {
       const link = await searchPexels(pexelsKey, query, orientation);
       if (link) {
         await downloadFile(link, outPath);
-        log(runId, "success", `Stock footage (Pexels) downloaded for scene #${scene.index}`, { stage: "animate" });
+        log(runId, "success", `Stock footage (Pexels) downloaded for scene #${scene.index} [query: '${query}']`, { stage: "animate" });
         return outPath;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(runId, "warn", `Pexels download failed for scene #${scene.index} (${msg.slice(0, 100)})`, { stage: "animate" });
+      log(runId, "warn", `Pexels download failed for scene #${scene.index} [query: '${query}'] (${msg.slice(0, 100)})`, { stage: "animate" });
     }
     return null;
   };
 
-  const tryPixabay = async (): Promise<string | null> => {
+  const tryPixabay = async (query: string): Promise<string | null> => {
     if (!pixabayKey) return null;
     try {
       const link = await searchPixabay(pixabayKey, query);
       if (link) {
         await downloadFile(link, outPath);
-        log(runId, "success", `Stock footage (Pixabay) downloaded for scene #${scene.index}`, { stage: "animate" });
+        log(runId, "success", `Stock footage (Pixabay) downloaded for scene #${scene.index} [query: '${query}']`, { stage: "animate" });
         return outPath;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(runId, "warn", `Pixabay download failed for scene #${scene.index} (${msg.slice(0, 100)})`, { stage: "animate" });
+      log(runId, "warn", `Pixabay download failed for scene #${scene.index} [query: '${query}'] (${msg.slice(0, 100)})`, { stage: "animate" });
     }
     return null;
   };
 
-  let result: string | null = null;
-  if (provider === "pexels") {
-    result = await tryPexels();
-  } else if (provider === "pixabay") {
-    result = await tryPixabay();
-  } else {
-    // "all": Round-robin alternate which service we search first based on scene index
-    if (scene.index % 2 === 0) {
-      result = (await tryPexels()) || (await tryPixabay());
+  for (const query of queries) {
+    let result: string | null = null;
+    if (provider === "pexels") {
+      result = await tryPexels(query);
+    } else if (provider === "pixabay") {
+      result = await tryPixabay(query);
     } else {
-      result = (await tryPixabay()) || (await tryPexels());
+      if (scene.index % 2 === 0) {
+        result = (await tryPexels(query)) || (await tryPixabay(query));
+      } else {
+        result = (await tryPixabay(query)) || (await tryPexels(query));
+      }
     }
+    if (result) return result;
   }
 
-  if (!result) {
-    log(runId, "warn", `No stock footage match found for query '${query}' — falling back to AI generation for scene #${scene.index}`, { stage: "animate" });
-  }
-
-  return result;
+  log(runId, "warn", `No stock footage match found for queries [${queries.join(", ")}] — falling back to AI generation for scene #${scene.index}`, { stage: "animate" });
+  return null;
 }

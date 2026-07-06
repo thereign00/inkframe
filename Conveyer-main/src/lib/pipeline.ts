@@ -226,9 +226,9 @@ export async function runPipeline(runId: string, script: string) {
         fs.statSync(r.audio.filePath).size > 512;
       if (!audioOk) issues.push("audio");
 
-      // Check image file
-      const imageOk = r.imagePath && fs.existsSync(r.imagePath) &&
-        fs.statSync(r.imagePath).size > 512;
+      // Check image file (only required if we don't have a valid video clip from stock/reuse)
+      const hasValidVideo = r.videoPath && fs.existsSync(r.videoPath) && fs.statSync(r.videoPath).size > 512;
+      const imageOk = hasValidVideo || (r.imagePath && fs.existsSync(r.imagePath) && fs.statSync(r.imagePath).size > 512);
       if (!imageOk) issues.push("image");
 
       // Check video file (only if animation or stock was expected for this scene)
@@ -371,54 +371,91 @@ async function processScene(
     reuseMap: Record<string, string>;
   },
 ): Promise<SceneResult> {
-  // TTS and Image run concurrently, each with their own retries
-  const [audio, image] = await Promise.all([
-    limits.limitTts(() =>
-      withRetry(runId, `TTS #${scene.index}`, () =>
-        synthesizeScene(runId, scene, dirs.audioDir)
-      )
-    ),
-    limits.limitImg(() =>
-      withRetry(runId, `Image #${scene.index}`, () =>
-        generateImage(runId, scene, dirs.imgDir)
-      )
-    ),
-  ]);
+  // For stock target scenes, we attempt to source a real stock video first.
+  // This avoids wasting image generation credits if a valid stock clip is found!
+  const isStockTarget = opts.stockTargets && opts.stockTargets.has(scene.index);
 
-  // Animation — starts as soon as image is ready (which is now).
-  // Non-fatal: falls back to Ken-Burns if all retries fail.
+  let audio: TtsResult;
+  let image: { filePath: string; providerJobId?: string; provider?: string } | null = null;
   let videoPath: string | null = null;
   const reuseFileId = opts.reuseMap[String(scene.index)];
 
-  if (reuseFileId) {
-    try {
-      videoPath = await downloadReusedClip(runId, scene, reuseFileId, dirs.animDir);
-    } catch (e) {
-      log(runId, "warn", `reuse #${scene.index} failed, generating fresh: ${(e as Error).message}`, { stage: "reuse" });
-    }
-  }
+  if (isStockTarget) {
+    // Run TTS and Stock Video fetch concurrently! Skip AI image generation!
+    const [audioRes, stockRes] = await Promise.all([
+      limits.limitTts(() =>
+        withRetry(runId, `TTS #${scene.index}`, () =>
+          synthesizeScene(runId, scene, dirs.audioDir)
+        )
+      ),
+      (async () => {
+        if (reuseFileId) {
+          try {
+            return await downloadReusedClip(runId, scene, reuseFileId, dirs.animDir);
+          } catch (e) {
+            log(runId, "warn", `reuse #${scene.index} failed, fetching stock: ${(e as Error).message}`, { stage: "reuse" });
+          }
+        }
+        try {
+          const stockPath = path.join(dirs.animDir, `stock_scene_${String(scene.index).padStart(3, "0")}.mp4`);
+          return await limits.limitAnim(() =>
+            withRetry(runId, `Stock #${scene.index}`, () =>
+              fetchStockVideo(runId, scene, stockPath)
+            )
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log(runId, "warn", `Stock #${scene.index} failed, will fallback to AI image: ${msg.slice(0, 150)}`, { stage: "animate" });
+          return null;
+        }
+      })(),
+    ]);
 
-  if (!videoPath && opts.stockTargets && opts.stockTargets.has(scene.index)) {
-    try {
-      const stockPath = path.join(dirs.animDir, `stock_scene_${String(scene.index).padStart(3, "0")}.mp4`);
-      videoPath = await limits.limitAnim(() =>
-        withRetry(runId, `Stock #${scene.index}`, () =>
-          fetchStockVideo(runId, scene, stockPath)
+    audio = audioRes;
+    videoPath = stockRes;
+
+    if (!videoPath) {
+      log(runId, "info", `Scene #${scene.index} stock footage unavailable, generating fallback AI image...`, { stage: "animate" });
+      image = await limits.limitImg(() =>
+        withRetry(runId, `Image #${scene.index}`, () =>
+          generateImage(runId, scene, dirs.imgDir)
         )
       );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      log(runId, "warn", `Stock #${scene.index} failed, falling back to AI/Ken-Burns: ${msg.slice(0, 150)}`, { stage: "animate" });
+    } else {
+      image = { filePath: "" };
+    }
+  } else {
+    const [audioRes, imageRes] = await Promise.all([
+      limits.limitTts(() =>
+        withRetry(runId, `TTS #${scene.index}`, () =>
+          synthesizeScene(runId, scene, dirs.audioDir)
+        )
+      ),
+      limits.limitImg(() =>
+        withRetry(runId, `Image #${scene.index}`, () =>
+          generateImage(runId, scene, dirs.imgDir)
+        )
+      ),
+    ]);
+    audio = audioRes;
+    image = imageRes;
+
+    if (reuseFileId) {
+      try {
+        videoPath = await downloadReusedClip(runId, scene, reuseFileId, dirs.animDir);
+      } catch (e) {
+        log(runId, "warn", `reuse #${scene.index} failed, generating fresh: ${(e as Error).message}`, { stage: "reuse" });
+      }
     }
   }
 
-  if (!videoPath && opts.animTargets.has(scene.index)) {
+  if (!videoPath && opts.animTargets.has(scene.index) && image && image.filePath) {
     try {
       videoPath = await limits.limitAnim(() =>
         withRetry(runId, `Anim #${scene.index}`, () =>
-          animateScene(runId, scene, image.filePath, dirs.animDir, {
-            providerJobId: image.providerJobId,
-            imageProvider: image.provider,
+          animateScene(runId, scene, image!.filePath, dirs.animDir, {
+            providerJobId: image!.providerJobId,
+            imageProvider: image!.provider,
             audioPath: audio.filePath,
           })
         )
@@ -431,10 +468,10 @@ async function processScene(
 
   return {
     scene,
-    imagePath: image.filePath,
+    imagePath: image?.filePath || "",
     videoPath,
     audio,
-    _imgProviderJobId: image.providerJobId,
-    _imgProvider: image.provider,
+    _imgProviderJobId: image?.providerJobId,
+    _imgProvider: image?.provider,
   };
 }
