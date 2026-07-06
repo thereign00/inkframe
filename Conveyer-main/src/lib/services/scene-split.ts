@@ -59,7 +59,7 @@ export async function splitScript(runId: string, script: string): Promise<Scene[
           }
         }
 
-        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts and motion instructions to maintain topic accuracy, setting continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nCRITICAL DIRECTORIAL INSTRUCTIONS:\n1. TOPIC ACCURACY: This script is about the DETECTED TOPIC above. Every scene's "visual_prompt" MUST accurately depict this subject matter with high visual fidelity.\n2. IMAGE & VIDEO PROMPTING: Follow the STILL IMAGE PROMPTING RULES and VIDEO ANIMATION PROMPTING RULES established above for each scene's visual description.\n3. STOCK KEYWORDS: While visual_prompt must be detailed and cinematic, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.\n4. TEXT OVERLAYS: You are the Director overseeing on-screen graphics. Whenever a scene introduces a major chapter/section heading or emphasizes a crucial date, statistic, or core concept, output a concise (2-5 words) "overlay_text" field to be burned onto the screen. Omit for normal dialogue scenes.`;
+        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts and motion instructions to maintain topic accuracy, setting continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nCRITICAL DIRECTORIAL INSTRUCTIONS:\n1. TOPIC ACCURACY: This script is about the DETECTED TOPIC above. Every scene's "visual_prompt" MUST accurately depict this subject matter with high visual fidelity.\n2. IMAGE & VIDEO PROMPTING: Follow the STILL IMAGE PROMPTING RULES and VIDEO ANIMATION PROMPTING RULES established above for each scene's visual description.\n3. STOCK KEYWORDS: While visual_prompt must be detailed and cinematic, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.\n4. TEXT OVERLAYS: You are the Director overseeing on-screen typography. On-screen text MUST BE EXTREMELY RARE and impactful (used in at most 15-20% of scenes). DO NOT put overlay_text on ordinary dialogue or explanation scenes! ONLY output "overlay_text" when introducing a major chapter title (e.g. "PART 1: THE ANOMALY") or emphasizing a crucial number/year (e.g. "263 GALAXIES" or "$45 BILLION"). For all other scenes, set "overlay_text" to null.`;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -106,6 +106,21 @@ export async function splitScript(runId: string, script: string): Promise<Scene[
         allScenes.length
       );
       allScenes.push(...chunkScenes);
+    }
+  }
+
+  // Programmatic safeguard: ensure on-screen text overlays are rare and impactful.
+  // We enforce a minimum cooldown of 3 scenes between overlays so viewers aren't overwhelmed.
+  let lastOverlayIndex = -999;
+  for (let i = 0; i < allScenes.length; i++) {
+    const s = allScenes[i];
+    if (s.overlay_text) {
+      const isChapter = /^((chapter|part|section|episode|#)\s*\d+)/i.test(s.overlay_text);
+      if (!isChapter && i - lastOverlayIndex < 3 && i !== 0) {
+        delete s.overlay_text;
+      } else {
+        lastOverlayIndex = i;
+      }
     }
   }
 

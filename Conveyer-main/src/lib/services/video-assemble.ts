@@ -202,7 +202,8 @@ export function probeDuration(filePath: string): Promise<number> {
 function getDrawtextFilter(text: string, h: number): string {
   const clean = text.replace(/\\/g, "\\\\").replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
   const fontSize = Math.round(h * 0.055);
-  return `drawtext=text='${clean}':fontcolor=white:fontsize=${fontSize}:x=(w-text_w)/2:y=h*0.82:box=1:boxcolor=black@0.6:boxborderw=10`;
+  // Limit display to the first 3.5 seconds so text doesn't linger across multi-part clips
+  return `drawtext=text='${clean}':fontcolor=white:fontsize=${fontSize}:x=(w-text_w)/2:y=h*0.82:box=1:boxcolor=black@0.6:boxborderw=10:enable='lte(t,3.5)'`;
 }
 
 /**

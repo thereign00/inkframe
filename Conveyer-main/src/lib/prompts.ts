@@ -35,7 +35,7 @@ For EACH scene, return a JSON object with:
   • Describe MOTION too — Veo generates 8-second clips, so include subtle camera motion (slow zoom, drift, parallax, tracking shot). Example: "slow pan across ancient stone columns at dawn, warm sunlight filtering through mist".
 - "search_keywords": 1 to 3 literal, concrete English visual nouns representing tangible physical objects or actions (e.g. "coffee cup close", "man typing laptop", "rain window", "ancient ruins"). MUST BE UNDER 3 WORDS. Do NOT use abstract concepts, full sentences, or poetic words, because stock libraries like Pexels/Pixabay only match basic literal nouns.
 - "duration_hint_sec": approximate audio length (number, 3–9).
-- "overlay_text": optional short text (2–5 words) to display on-screen during this scene. Use ONLY when a scene introduces a major chapter/section heading (e.g. "CHAPTER 1: THE COLLAPSE") or emphasizes a critical key term, statistic, or date (e.g. "$45 Billion Lost"). Leave null or omit for normal dialogue scenes where no overlay is needed.
+- "overlay_text": STRICTLY RARE on-screen text (2–5 words). LEAVE NULL / OMIT for at least 80% to 90% of scenes! ONLY populate this field if the scene introduces a MAJOR chapter/section heading (e.g. "PART 1: THE ANOMALY") or highlights a critical statistical milestone (e.g. "$45 BILLION" or "THE YEAR 1984"). For normal explanation, narration, or dialogue scenes, this MUST BE null.
 
 Return a STRICTLY valid JSON array — no markdown, no explanations.
 
@@ -48,26 +48,29 @@ For a ~1500-word script expect ~80–130 scenes. For a ~700-word script expect ~
   director_analysis: `You are an award-winning film director, screenwriter, and visual VFX supervisor. Read the provided script and analyze its core subject matter, historical/temporal context, tone, and visual requirements.
 Output a concise, authoritative Directorial Vision Breakdown that will be displayed directly in the run logs and fed into AI scene generation to ensure accurate, high-fidelity visuals (NOT random hallucinations or generic tropes).
 
-Structure your breakdown EXACTLY with the following numbered sections:
+Your breakdown MUST be formatted exactly as follows:
+📍 1. 📌 DETECTED TOPIC & GENRE
+- **Topic:** What is the precise subject matter? (e.g. "1990s Wall Street high-frequency trading", "Ancient Mayan architectural engineering", "Astrophysics and galaxy formation")
+- **Genre:** What is the documentary style? (e.g. "Cinematic Science Documentary", "Investigative Financial Journalism", "Historical Epic")
+- **Setting/Era:** What time period and geographical/physical locations should visuals reflect?
 
-1. 📌 DETECTED TOPIC & GENRE
-- Explicitly state what this script is about based on your reading (e.g., "Ancient Roman military engineering", "Personal finance & compound interest", "Deep ocean biology", "AI revolution in tech").
-- Summarize the setting, era, and core subject matter.
+📍 2. 🎨 OVERARCHING VISUAL THEME & COLOR PALETTE
+- **Aesthetic:** What is the primary visual style? (e.g. "Gritty 35mm film look with high contrast", "Clean hyper-modern digital macro photography")
+- **Color Palette:** Specify 2-3 dominant color tones that match the subject (e.g. "Cold steel blues, neon green data overlays, dark charcoal shadows")
+- **Lighting & Mood:** What is the atmospheric lighting? (e.g. "Chiaroscuro studio lighting", "Natural golden hour sunlight", "Moody fluorescent office interiors")
 
-2. 🎨 OVERARCHING VISUAL THEME & COLOR PALETTE
-- Establish the unifying aesthetic, lighting, mood, and color palette (e.g., "Warm terracotta tones, dusty sunlight, gritty bronze armor" or "Sleek glass, cool neon blues, clean minimalist corporate environments").
+📍 3. 📷 STILL IMAGE PROMPTING RULES
+- Give explicit cinematography guidelines for all still images generated in this project (e.g. "Use wide-angle anamorphic lenses", "Focus on tactile textures and close-up details", "Avoid generic stock photo poses")
+- State strict negative constraints relevant to this topic to prevent AI hallucinations.
 
-3. 🖼️ STILL IMAGE PROMPTING RULES (For AI Image Generation)
-- Give specific instructions on how to structure still image prompts for this topic so they are historically/technically accurate and visually stunning.
-- Specify exact subject matter rules (what MUST appear in frame, what must NEVER appear, depth of field, photorealistic style).
+📍 4. 🎥 VIDEO ANIMATION PROMPTING RULES
+- Describe the exact camera motion language suitable for this video (e.g. "Slow, deliberate orbital camera movements", "Smooth forward tracking shots like a dolly zoom", "Micro-movements and atmospheric particle drift")
+- Explicitly forbid jarring or unnatural animations (e.g. "No rapid panning, no cartoonish morphing, no erratic zooming").
 
-4. 🎥 VIDEO ANIMATION PROMPTING RULES (For AI Video Generation / Veo)
-- Give specific camera motion and animation instructions tailored to this topic (e.g., "Slow, dignified tracking shot across Roman legions", "Subtle macro camera drift over financial charts", "Smooth cinematic crane shot at 24fps film look").
+📍 5. 🔤 ON-SCREEN TEXT OVERLAYS & TYPOGRAPHY
+- Establish clear rules for when and what text overlays should appear on screen (e.g. major chapter titles, key numbers/dates, or critical terminology) so the video has clear visual anchors without overcrowding every scene.
 
-5. 🔤 ON-SCREEN TEXT OVERLAYS & TYPOGRAPHY
-- Establish clear rules for when and what text overlays should appear on screen (e.g. chapter titles, key numbers/dates, or critical terminology) so the video has clear visual anchors.
-
-Keep your breakdown clear, authoritative, structured, and under 400 words.`,
+Keep your entire response professional, dense with actionable directorial guidance, and under 300 words. Do not include conversational intro or outro filler.`,
 };
 
 const getStmt = db.prepare("SELECT content FROM prompts WHERE name = ?");
@@ -96,7 +99,7 @@ export function seedPromptDefaults(forceUpgrade = false) {
   for (const [n, c] of Object.entries(DEFAULT_PROMPTS)) {
     const row = getStmt.get(n) as { content: string } | undefined;
     const isOldAstronomy = row?.content && (row.content.includes("astronomy") || row.content.includes("cosmic genre") || row.content.includes("award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about."));
-    const needsOverlayUpgrade = n === "scene_split" && row?.content && !row.content.includes("overlay_text");
+    const needsOverlayUpgrade = n === "scene_split" && row?.content && (!row.content.includes("overlay_text") || !row.content.includes("STRICTLY RARE"));
     if (!row || forceUpgrade || isOldAstronomy || needsOverlayUpgrade) {
       upsertStmt.run(n, c);
     }
@@ -107,7 +110,7 @@ export function seedPromptDefaults(forceUpgrade = false) {
       const parsed = JSON.parse(active.prompts_json) as Record<string, string>;
       let changed = false;
       for (const [n, c] of Object.entries(DEFAULT_PROMPTS)) {
-        if (!parsed[n] || parsed[n].includes("astronomy") || parsed[n].includes("cosmic genre") || parsed[n].includes("award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about.") || (n === "scene_split" && !parsed[n].includes("overlay_text"))) {
+        if (!parsed[n] || parsed[n].includes("astronomy") || parsed[n].includes("cosmic genre") || parsed[n].includes("award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about.") || (n === "scene_split" && (!parsed[n].includes("overlay_text") || !parsed[n].includes("STRICTLY RARE")))) {
           parsed[n] = c;
           changed = true;
         }
