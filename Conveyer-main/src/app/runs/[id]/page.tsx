@@ -46,6 +46,21 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   const tail = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const es = new EventSource(`/api/runs/${id}/logs`);
+    es.addEventListener("log", (ev) => {
+      try {
+        const e = JSON.parse((ev as MessageEvent).data) as LogEntry;
+        setLogs((prev) => {
+          if (e.id && prev.some((p) => p.id === e.id)) return prev;
+          const next = [...prev, e];
+          return next.length > LOG_DISPLAY_CAP ? next.slice(-LOG_DISPLAY_CAP) : next;
+        });
+      } catch {}
+    });
+    return () => es.close();
+  }, [id]);
+
+  useEffect(() => {
     let alive = true;
     let lastLogId = 0;
 
@@ -53,7 +68,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
       if (!alive) return;
       try {
         // Fetch new logs since lastLogId
-        const logsR = await fetch(`/api/runs/${id}/logs/poll?after=${lastLogId}`);
+        let logsR = await fetch(`/api/runs/${id}/logs-poll?after=${lastLogId}`);
+        if (!logsR.ok) {
+          logsR = await fetch(`/api/runs/${id}/logs/poll?after=${lastLogId}`);
+        }
         if (logsR.ok) {
           const entries = (await logsR.json()) as LogEntry[];
           if (entries.length > 0) {
@@ -62,7 +80,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
               if (e.id && e.id > lastLogId) lastLogId = e.id;
             }
             setLogs((prev) => {
-              const next = [...prev, ...entries];
+              const existingIds = new Set(prev.map((p) => p.id).filter(Boolean));
+              const newEntries = entries.filter((e) => !e.id || !existingIds.has(e.id));
+              if (newEntries.length === 0) return prev;
+              const next = [...prev, ...newEntries];
               return next.length > LOG_DISPLAY_CAP ? next.slice(-LOG_DISPLAY_CAP) : next;
             });
           }
