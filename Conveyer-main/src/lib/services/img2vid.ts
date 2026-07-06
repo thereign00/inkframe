@@ -3,7 +3,7 @@ import path from "node:path";
 import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
-import { CancelledError } from "../cancellation";
+import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
@@ -34,6 +34,7 @@ export async function animateScene(
   outDir: string,
   options: { providerJobId?: string; imageProvider?: string; audioPath?: string } = {}
 ): Promise<string | null> {
+  checkCancelled(runId);
   const provider = (getSetting("ANIMATION_PROVIDER") || "off").toLowerCase().trim();
   if (provider === "off") return null;
 

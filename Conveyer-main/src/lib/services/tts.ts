@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getSetting } from "../settings";
 import { log } from "../logger";
+import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createTtsJob, pollJob, downloadJob, tryNextKey, getKeyList } from "./labs69";
 import { createKieTtsTask, pollKieTask, downloadKieTask } from "./kieai";
@@ -27,6 +28,7 @@ export async function synthesizeScene(
   scene: Scene,
   outDir: string
 ): Promise<TtsResult> {
+  checkCancelled(runId);
   const provider = (getSetting("TTS_PROVIDER") || "69labs").toLowerCase();
   const fallback = (getSetting("TTS_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const fileName = `scene_${String(scene.index).padStart(3, "0")}.mp3`;
@@ -46,6 +48,7 @@ export async function synthesizeScene(
   try {
     return await synthesizeWithKeyFailover(runId, provider, scene, filePath);
   } catch (primaryErr) {
+    if (primaryErr instanceof CancelledError) throw primaryErr;
     // If no fallback configured, or same as primary, just throw
     if (!fallback || fallback === "off" || fallback === provider) {
       throw primaryErr;
@@ -62,6 +65,7 @@ export async function synthesizeScene(
       log(runId, "success", `TTS #${scene.index} recovered via fallback provider (${fallback})`, { stage: "tts" });
       return result;
     } catch (fallbackErr) {
+      if (fallbackErr instanceof CancelledError) throw fallbackErr;
       const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
       log(runId, "error",
         `TTS #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
@@ -92,6 +96,7 @@ async function synthesizeWithKeyFailover(
     try {
       return await synthesizeWithProvider(runId, provider, scene, filePath);
     } catch (err) {
+      if (err instanceof CancelledError) throw err;
       lastErr = err instanceof Error ? err : new Error(String(err));
 
       const currentKey = getKeyList().find((k) => !failedKeys.has(k));

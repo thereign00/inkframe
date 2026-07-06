@@ -373,6 +373,7 @@ export async function pollKieTask(
       );
     }
     await sleep(POLL_INTERVAL_MS);
+    if (runId) checkCancelled(runId);
   }
 }
 

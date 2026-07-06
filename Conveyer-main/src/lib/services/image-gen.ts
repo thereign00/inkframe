@@ -3,7 +3,7 @@ import path from "node:path";
 import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
-import { CancelledError } from "../cancellation";
+import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieImageTask, pollKieTask, downloadKieTask } from "./kieai";
@@ -32,6 +32,7 @@ export async function generateImage(
   scene: Scene,
   outDir: string
 ): Promise<ImageResult> {
+  checkCancelled(runId);
   const provider = (getSetting("IMAGE_PROVIDER") || "69labs").toLowerCase().trim();
   const fallback = (getSetting("IMAGE_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const styleSuffix = getPrompt("image_prompt");

@@ -46,6 +46,7 @@ async function withRetry<T>(
           { stage: "pipeline" }
         );
         await new Promise(r => setTimeout(r, delay));
+        checkCancelled(runId);
       } else {
         throw new Error(`${label} failed after ${MAX_RETRIES} attempts: ${msg.slice(0, 300)}`);
       }

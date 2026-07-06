@@ -1,20 +1,35 @@
+import db from "./db";
+
 /**
- * In-memory cancellation registry.
+ * Cancellation registry with in-memory cache and SQLite database persistence.
  *
- * When the user clicks Stop, the API adds the runId here. The pipeline checks
- * this set between stages and throws CancelledError when it sees its id.
- *
- * Lives in the dev server process memory — clears on restart, which is fine
- * for our use case (any cancelled run will already be marked `cancelled` in DB).
+ * Why DB-backed: In Next.js dev server or multi-worker setups, module
+ * evaluation can create isolated memory spaces. By checking the SQLite
+ * `runs` table when a run is not in memory, we guarantee that clicking Stop
+ * halts tasks in all processes and workers immediately.
  */
 const cancelled = new Set<string>();
 
+const getRunStatusStmt = db.prepare("SELECT status FROM runs WHERE id = ?");
+const updateRunStatusStmt = db.prepare("UPDATE runs SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?");
+
 export function markCancelled(runId: string) {
   cancelled.add(runId);
+  try {
+    updateRunStatusStmt.run(runId);
+  } catch {}
 }
 
 export function isCancelled(runId: string): boolean {
-  return cancelled.has(runId);
+  if (cancelled.has(runId)) return true;
+  try {
+    const row = getRunStatusStmt.get(runId) as { status: string } | undefined;
+    if (row && row.status === "cancelled") {
+      cancelled.add(runId);
+      return true;
+    }
+  } catch {}
+  return false;
 }
 
 export function clearCancelled(runId: string) {
@@ -23,7 +38,7 @@ export function clearCancelled(runId: string) {
 
 /** Throws CancelledError if the run has been flagged for cancellation. */
 export function checkCancelled(runId: string): void {
-  if (cancelled.has(runId)) {
+  if (isCancelled(runId)) {
     throw new CancelledError(`Run ${runId} cancelled by user`);
   }
 }

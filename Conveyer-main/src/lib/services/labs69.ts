@@ -560,6 +560,7 @@ export async function pollJob(
       throw new Error(`69labs ${kind} job ${jobId} exceeded ${POLL_MAX_MS / 1000}s polling timeout`);
     }
     await sleep(POLL_INTERVAL_MS);
+    if (runId) checkCancelled(runId);
   }
 }
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getSetting } from "../settings";
 import { log } from "../logger";
+import { checkCancelled, CancelledError } from "../cancellation";
 import { type Scene } from "./scene-split";
 
 /**
@@ -39,24 +40,23 @@ function getSearchQueries(scene: Scene): string[] {
     return str
       .replace(/[^\w\s]/g, " ")
       .split(/\s+/)
-      .map((w) => w.toLowerCase())
+      .map((w) => w.toLowerCase().trim())
       .filter((w) => w.length > 2 && !stopWords.has(w));
   }
 
-  const queries: string[] = [];
+  const kwWords = cleanString(scene.search_keywords || "");
+  const visualWords = cleanString(scene.visual_prompt || "");
 
-  if (scene.search_keywords && scene.search_keywords.trim().length > 0) {
-    const kwWords = cleanString(scene.search_keywords);
-    if (kwWords.length > 0) {
-      queries.push(kwWords.slice(0, 3).join(" "));
-      if (kwWords.length >= 2) {
-        const q2 = kwWords.slice(0, 2).join(" ");
-        if (!queries.includes(q2)) queries.push(q2);
-      }
-      if (!queries.includes(kwWords[0])) queries.push(kwWords[0]);
+  const combinedWords = Array.from(new Set([...kwWords, ...visualWords])).slice(0, 5);
+
+  const queries: string[] = [];
+  if (kwWords.length > 0) {
+    queries.push(kwWords.slice(0, 3).join(" "));
+    if (kwWords.length >= 2) {
+      const q2 = kwWords.slice(0, 2).join(" ");
+      if (!queries.includes(q2)) queries.push(q2);
     }
   }
-
   const vpWords = cleanString(scene.visual_prompt);
   if (vpWords.length > 0) {
     const q3 = vpWords.slice(0, 3).join(" ");
@@ -170,6 +170,7 @@ export async function fetchStockVideo(
   scene: Scene,
   outPath: string
 ): Promise<string | null> {
+  checkCancelled(runId);
   const provider = (getSetting("STOCK_FOOTAGE_PROVIDER") || "all").toLowerCase();
   if (provider === "off") return null;
 
@@ -220,6 +221,7 @@ export async function fetchStockVideo(
   };
 
   for (const query of queries) {
+    checkCancelled(runId);
     let result: string | null = null;
     if (provider === "pexels") {
       result = await tryPexels(query);
