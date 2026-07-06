@@ -4,7 +4,7 @@ import db from "./db";
 import { log } from "./logger";
 import { getSetting } from "./settings";
 import { getRunDir } from "./run-paths";
-import { pLimit } from "./plimit";
+import { pLimit, type LimitFunction } from "./plimit";
 import { splitScript, type Scene } from "./services/scene-split";
 import { synthesizeScene, type TtsResult } from "./services/tts";
 import { generateImage, type ImageResult } from "./services/image-gen";
@@ -69,6 +69,10 @@ export async function runPipeline(runId: string, script: string) {
   const animDir = path.join(runDir, "animations");
   for (const d of [runDir, audioDir, imgDir, animDir]) fs.mkdirSync(d, { recursive: true });
 
+  let limitTts!: LimitFunction;
+  let limitImg!: LimitFunction;
+  let limitAnim!: LimitFunction;
+
   try {
     clearCancelled(runId);
     updateRun.run("running", null, runId);
@@ -99,9 +103,9 @@ export async function runPipeline(runId: string, script: string) {
     const ttsConcurrency = Math.max(1, Number(getSetting("TTS_CONCURRENCY") || "3")) * keyCount;
     const imageConcurrency = Math.max(1, Number(getSetting("IMAGE_CONCURRENCY") || "5")) * keyCount;
     const animConcurrency = Math.max(1, Number(getSetting("ANIMATION_CONCURRENCY") || "3")) * keyCount;
-    const limitTts = pLimit(ttsConcurrency);
-    const limitImg = pLimit(imageConcurrency);
-    const limitAnim = pLimit(animConcurrency);
+    limitTts = pLimit(ttsConcurrency);
+    limitImg = pLimit(imageConcurrency);
+    limitAnim = pLimit(animConcurrency);
 
     // Batch size — how many scenes process concurrently. Each scene runs
     // TTS + Image + Animation all at once, so the real concurrency is
@@ -290,6 +294,7 @@ export async function runPipeline(runId: string, script: string) {
               }
               allResults[i] = { ...allResults[i], videoPath: newVideo };
             } catch (animErr) {
+              if (animErr instanceof CancelledError) throw animErr;
               // Animation repair failure is non-fatal — Ken-Burns fallback
               const msg = animErr instanceof Error ? animErr.message : String(animErr);
               log(runId, "warn", `Repair video #${idx} failed, will use Ken-Burns: ${msg.slice(0, 150)}`, { stage: "pipeline" });
@@ -341,6 +346,10 @@ export async function runPipeline(runId: string, script: string) {
     log(runId, "success", "Pipeline complete", { stage: "pipeline", data: { finalPath } });
   } catch (e) {
     setBatchKey(null);
+    const cancelErr = e instanceof CancelledError ? e : new CancelledError("Pipeline stopped");
+    limitTts?.clearQueue(cancelErr);
+    limitImg?.clearQueue(cancelErr);
+    limitAnim?.clearQueue(cancelErr);
     if (e instanceof CancelledError) {
       log(runId, "warn", "Pipeline cancelled by user", { stage: "pipeline" });
     } else {
@@ -361,9 +370,9 @@ async function processScene(
   scene: Scene,
   dirs: { audioDir: string; imgDir: string; animDir: string },
   limits: {
-    limitTts: ReturnType<typeof pLimit>;
-    limitImg: ReturnType<typeof pLimit>;
-    limitAnim: ReturnType<typeof pLimit>;
+    limitTts: LimitFunction;
+    limitImg: LimitFunction;
+    limitAnim: LimitFunction;
   },
   opts: {
     animTargets: Set<number>;
@@ -371,6 +380,7 @@ async function processScene(
     reuseMap: Record<string, string>;
   },
 ): Promise<SceneResult> {
+  checkCancelled(runId);
   // For stock target scenes, we attempt to source a real stock video first.
   // This avoids wasting image generation credits if a valid stock clip is found!
   const isStockTarget = opts.stockTargets && opts.stockTargets.has(scene.index);
@@ -393,6 +403,7 @@ async function processScene(
           try {
             return await downloadReusedClip(runId, scene, reuseFileId, dirs.animDir);
           } catch (e) {
+            if (e instanceof CancelledError) throw e;
             log(runId, "warn", `reuse #${scene.index} failed, fetching stock: ${(e as Error).message}`, { stage: "reuse" });
           }
         }
@@ -404,6 +415,7 @@ async function processScene(
             )
           );
         } catch (e) {
+          if (e instanceof CancelledError) throw e;
           const msg = e instanceof Error ? e.message : String(e);
           log(runId, "warn", `Stock #${scene.index} failed, will fallback to AI image: ${msg.slice(0, 150)}`, { stage: "animate" });
           return null;
@@ -415,6 +427,7 @@ async function processScene(
     videoPath = stockRes;
 
     if (!videoPath) {
+      checkCancelled(runId);
       log(runId, "info", `Scene #${scene.index} stock footage unavailable, generating fallback AI image...`, { stage: "animate" });
       image = await limits.limitImg(() =>
         withRetry(runId, `Image #${scene.index}`, () =>
@@ -444,12 +457,14 @@ async function processScene(
       try {
         videoPath = await downloadReusedClip(runId, scene, reuseFileId, dirs.animDir);
       } catch (e) {
+        if (e instanceof CancelledError) throw e;
         log(runId, "warn", `reuse #${scene.index} failed, generating fresh: ${(e as Error).message}`, { stage: "reuse" });
       }
     }
   }
 
   if (!videoPath && opts.animTargets.has(scene.index) && image && image.filePath) {
+    checkCancelled(runId);
     try {
       videoPath = await limits.limitAnim(() =>
         withRetry(runId, `Anim #${scene.index}`, () =>
@@ -461,6 +476,7 @@ async function processScene(
         )
       );
     } catch (e) {
+      if (e instanceof CancelledError) throw e;
       const msg = e instanceof Error ? e.message : String(e);
       log(runId, "warn", `Anim #${scene.index} failed after retries, using Ken-Burns: ${msg.slice(0, 200)}`, { stage: "animate" });
     }

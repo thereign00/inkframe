@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { getSetting } from "../settings";
 import { log, type LogLevel } from "../logger";
+import { checkCancelled } from "../cancellation";
 
 /**
  * Kie AI API client (https://kie.ai).
@@ -298,6 +299,7 @@ export async function pollKieTask(
   let pollPath = `${basePollPath}?taskId=${encodeURIComponent(taskId)}`;
 
   while (true) {
+    if (runId) checkCancelled(runId);
     const r = await fetchWithTimeout(`${BASE}${pollPath}`, {
       headers: authHeaders(),
     });

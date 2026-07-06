@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { getSetting } from "../settings";
 import { log, type LogLevel } from "../logger";
+import { checkCancelled } from "../cancellation";
 
 /**
  * 69labs.vip API client with multi-key pool support.
@@ -540,6 +541,7 @@ export async function pollJob(
   const key = keyFor(jobId);
   const start = Date.now();
   while (true) {
+    if (runId) checkCancelled(runId);
     const r = await fetchWithTimeout(`${BASE}/${kind}/status/${jobId}`, { headers: authHeadersFor(key) });
     if (!r.ok) {
       throw new Error(`69labs status ${kind}/${jobId} ${r.status}: ${(await r.text()).slice(0, 200)}`);

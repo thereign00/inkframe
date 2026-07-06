@@ -3,6 +3,7 @@ import path from "node:path";
 import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
+import { CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieImageTask, pollKieTask, downloadKieTask } from "./kieai";
@@ -43,6 +44,7 @@ export async function generateImage(
     const result = await generateWithKeyFailover(runId, provider, finalPrompt, filePath, scene.index);
     return result;
   } catch (primaryErr) {
+    if (primaryErr instanceof CancelledError) throw primaryErr;
     // If no fallback configured, or fallback is same as primary, just throw
     if (!fallback || fallback === "off" || fallback === provider) {
       throw primaryErr;
@@ -60,6 +62,7 @@ export async function generateImage(
       log(runId, "success", `Image #${scene.index} recovered via fallback provider (${fallback})`, { stage: "image" });
       return result;
     } catch (fallbackErr) {
+      if (fallbackErr instanceof CancelledError) throw fallbackErr;
       const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
       log(runId, "error",
         `Image #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
@@ -94,6 +97,7 @@ async function generateWithKeyFailover(
     try {
       return await generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
     } catch (err) {
+      if (err instanceof CancelledError) throw err;
       lastErr = err instanceof Error ? err : new Error(String(err));
 
       // Track which key failed (current batch key)

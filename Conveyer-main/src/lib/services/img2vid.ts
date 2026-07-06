@@ -3,6 +3,7 @@ import path from "node:path";
 import { getSetting } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
+import { CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
@@ -67,6 +68,7 @@ export async function animateScene(
     try {
       await runAnimWithKeyFailover(runId, provider, scene, imagePath, partPath, options);
     } catch (primaryErr) {
+      if (primaryErr instanceof CancelledError) throw primaryErr;
       if (!fallback || fallback === "off" || fallback === provider) {
         throw primaryErr;
       }
@@ -79,6 +81,7 @@ export async function animateScene(
         await runAnimWithKeyFailover(runId, fallback, scene, imagePath, partPath, options);
         log(runId, "success", `Animation #${scene.index} recovered via fallback (${fallback})`, { stage: "animate" });
       } catch (fallbackErr) {
+        if (fallbackErr instanceof CancelledError) throw fallbackErr;
         const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         log(runId, "error",
           `Anim #${scene.index} fallback (${fallback}) also failed: ${fbMsg.slice(0, 150)}`,
@@ -136,6 +139,7 @@ async function runAnimWithKeyFailover(
     try {
       return await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
     } catch (err) {
+      if (err instanceof CancelledError) throw err;
       lastErr = err instanceof Error ? err : new Error(String(err));
 
       const currentKey = getKeyList().find((k) => !failedKeys.has(k));
