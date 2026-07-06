@@ -12,6 +12,7 @@ export interface Scene {
   visual_prompt: string;
   search_keywords?: string;
   duration_hint_sec: number;
+  overlay_text?: string;
 }
 
 /**
@@ -58,7 +59,7 @@ export async function splitScript(runId: string, script: string): Promise<Scene[
           }
         }
 
-        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts and motion instructions to maintain topic accuracy, setting continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nCRITICAL DIRECTORIAL INSTRUCTIONS:\n1. TOPIC ACCURACY: This script is about the DETECTED TOPIC above. Every scene's "visual_prompt" MUST accurately depict this subject matter with high visual fidelity.\n2. IMAGE & VIDEO PROMPTING: Follow the STILL IMAGE PROMPTING RULES and VIDEO ANIMATION PROMPTING RULES established above for each scene's visual description.\n3. STOCK KEYWORDS: While visual_prompt must be detailed and cinematic, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.`;
+        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts and motion instructions to maintain topic accuracy, setting continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nCRITICAL DIRECTORIAL INSTRUCTIONS:\n1. TOPIC ACCURACY: This script is about the DETECTED TOPIC above. Every scene's "visual_prompt" MUST accurately depict this subject matter with high visual fidelity.\n2. IMAGE & VIDEO PROMPTING: Follow the STILL IMAGE PROMPTING RULES and VIDEO ANIMATION PROMPTING RULES established above for each scene's visual description.\n3. STOCK KEYWORDS: While visual_prompt must be detailed and cinematic, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.\n4. TEXT OVERLAYS: You are the Director overseeing on-screen graphics. Whenever a scene introduces a major chapter/section heading or emphasizes a crucial date, statistic, or core concept, output a concise (2-5 words) "overlay_text" field to be burned onto the screen. Omit for normal dialogue scenes.`;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -190,6 +191,7 @@ async function splitOneChunk(
     visual_prompt: String(s.visual_prompt ?? ""),
     search_keywords: s.search_keywords ? String(s.search_keywords) : undefined,
     duration_hint_sec: Number(s.duration_hint_sec ?? 6),
+    overlay_text: s.overlay_text ? String(s.overlay_text).trim() : undefined,
   }));
 }
 

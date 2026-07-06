@@ -97,16 +97,17 @@ export async function assembleVideo(
         // Total clip duration = audio + silence padding at the end so consecutive
         // scenes get a natural breath between them after concat.
         const clipDuration = audioDuration + tailSilence;
+        const overlayText = item.scene.overlay_text;
         if (item.videoPath) {
-          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, keepVideoAudio);
+          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, keepVideoAudio, overlayText);
         } else {
           const zoomDirection: "in" | "out" = Math.random() < 0.5 ? "in" : "out";
-          await renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, zoomDirection, tailSilence);
+          await renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, zoomDirection, tailSilence, overlayText);
         }
         log(
           runId,
           "info",
-          `Clip #${item.scene.index} (${audioDuration.toFixed(1)}s audio + ${tailSilence}s silence = ${clipDuration.toFixed(1)}s, ${item.videoPath ? "img2vid" : "ken-burns"}) done`,
+          `Clip #${item.scene.index} (${audioDuration.toFixed(1)}s audio + ${tailSilence}s silence = ${clipDuration.toFixed(1)}s, ${item.videoPath ? "img2vid" : "ken-burns"}${overlayText ? `, text: "${overlayText}"` : ""}) done`,
           { stage: "assemble" }
         );
         return { path: clipPath, durationSec: clipDuration, index: item.scene.index };
@@ -198,6 +199,12 @@ export function probeDuration(filePath: string): Promise<number> {
   });
 }
 
+function getDrawtextFilter(text: string, h: number): string {
+  const clean = text.replace(/\\/g, "\\\\").replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
+  const fontSize = Math.round(h * 0.055);
+  return `drawtext=text='${clean}':fontcolor=white:fontsize=${fontSize}:x=(w-text_w)/2:y=h*0.82:box=1:boxcolor=black@0.6:boxborderw=10`;
+}
+
 /**
  * Ken-Burns clip: still image with a slow zoom plus optional gentle pan.
  * direction = 'in' → 1.0 → 1.18, 'out' → 1.18 → 1.0.
@@ -211,7 +218,8 @@ function renderKenBurnsClip(
   fps: number,
   durationSec: number,
   direction: "in" | "out",
-  tailSilenceSec: number = 0
+  tailSilenceSec: number = 0,
+  overlayText?: string
 ): Promise<void> {
   const totalFrames = Math.max(2, Math.ceil(durationSec * fps));
   const minZoom = 1.0;
@@ -248,7 +256,10 @@ function renderKenBurnsClip(
   }
 
   // Upscale the input ×2 so the zoom doesn't blur
-  const filter = `scale=${w * 2}:${h * 2}:flags=lanczos,zoompan=z='${zoomExpr}':x='${xExpr}':y='${yExpr}':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
+  let filter = `scale=${w * 2}:${h * 2}:flags=lanczos,zoompan=z='${zoomExpr}':x='${xExpr}':y='${yExpr}':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
+  if (overlayText) {
+    filter = `${filter},${getDrawtextFilter(overlayText, h)}`;
+  }
 
   return new Promise((resolve, reject) => {
     const cmd = ffmpeg()
@@ -308,7 +319,8 @@ async function renderAnimatedClip(
   fps: number,
   durationSec: number,
   tailSilenceSec: number = 0,
-  keepVideoAudio: boolean = false
+  keepVideoAudio: boolean = false,
+  overlayText?: string
 ): Promise<void> {
   const videoDur = await probeDuration(videoPath);
 
@@ -333,6 +345,10 @@ async function renderAnimatedClip(
     if (freezeNeeded > 0.05) {
       videoFilter = `${videoFilter},tpad=stop_mode=clone:stop_duration=${freezeNeeded.toFixed(3)}`;
     }
+  }
+
+  if (overlayText) {
+    videoFilter = `${videoFilter},${getDrawtextFilter(overlayText, h)}`;
   }
 
   return new Promise((resolve, reject) => {

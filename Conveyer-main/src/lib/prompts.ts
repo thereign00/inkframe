@@ -35,6 +35,7 @@ For EACH scene, return a JSON object with:
   • Describe MOTION too — Veo generates 8-second clips, so include subtle camera motion (slow zoom, drift, parallax, tracking shot). Example: "slow pan across ancient stone columns at dawn, warm sunlight filtering through mist".
 - "search_keywords": 1 to 3 literal, concrete English visual nouns representing tangible physical objects or actions (e.g. "coffee cup close", "man typing laptop", "rain window", "ancient ruins"). MUST BE UNDER 3 WORDS. Do NOT use abstract concepts, full sentences, or poetic words, because stock libraries like Pexels/Pixabay only match basic literal nouns.
 - "duration_hint_sec": approximate audio length (number, 3–9).
+- "overlay_text": optional short text (2–5 words) to display on-screen during this scene. Use ONLY when a scene introduces a major chapter/section heading (e.g. "CHAPTER 1: THE COLLAPSE") or emphasizes a critical key term, statistic, or date (e.g. "$45 Billion Lost"). Leave null or omit for normal dialogue scenes where no overlay is needed.
 
 Return a STRICTLY valid JSON array — no markdown, no explanations.
 
@@ -62,6 +63,9 @@ Structure your breakdown EXACTLY with the following numbered sections:
 
 4. 🎥 VIDEO ANIMATION PROMPTING RULES (For AI Video Generation / Veo)
 - Give specific camera motion and animation instructions tailored to this topic (e.g., "Slow, dignified tracking shot across Roman legions", "Subtle macro camera drift over financial charts", "Smooth cinematic crane shot at 24fps film look").
+
+5. 🔤 ON-SCREEN TEXT OVERLAYS & TYPOGRAPHY
+- Establish clear rules for when and what text overlays should appear on screen (e.g. chapter titles, key numbers/dates, or critical terminology) so the video has clear visual anchors.
 
 Keep your breakdown clear, authoritative, structured, and under 400 words.`,
 };
@@ -92,7 +96,8 @@ export function seedPromptDefaults(forceUpgrade = false) {
   for (const [n, c] of Object.entries(DEFAULT_PROMPTS)) {
     const row = getStmt.get(n) as { content: string } | undefined;
     const isOldAstronomy = row?.content && (row.content.includes("astronomy") || row.content.includes("cosmic genre") || row.content.includes("award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about."));
-    if (!row || forceUpgrade || isOldAstronomy) {
+    const needsOverlayUpgrade = n === "scene_split" && row?.content && !row.content.includes("overlay_text");
+    if (!row || forceUpgrade || isOldAstronomy || needsOverlayUpgrade) {
       upsertStmt.run(n, c);
     }
   }
@@ -102,7 +107,7 @@ export function seedPromptDefaults(forceUpgrade = false) {
       const parsed = JSON.parse(active.prompts_json) as Record<string, string>;
       let changed = false;
       for (const [n, c] of Object.entries(DEFAULT_PROMPTS)) {
-        if (!parsed[n] || parsed[n].includes("astronomy") || parsed[n].includes("cosmic genre") || parsed[n].includes("award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about.")) {
+        if (!parsed[n] || parsed[n].includes("astronomy") || parsed[n].includes("cosmic genre") || parsed[n].includes("award-winning film director and cinematographer. Read the provided script and analyze what the story is truly about.") || (n === "scene_split" && !parsed[n].includes("overlay_text"))) {
           parsed[n] = c;
           changed = true;
         }
