@@ -40,12 +40,25 @@ export async function splitScript(runId: string, script: string): Promise<Scene[
   let systemPrompt = getPrompt("scene_split");
 
   if (getSetting("DIRECTOR_MODE") === "1") {
-    log(runId, "info", "Director Mode enabled — analyzing script story, themes, and cinematography...", { stage: "scene_split" });
+    log(runId, "info", "🎬 Director Mode enabled — reading script and analyzing topic, visual themes, and cinematography...", { stage: "scene_split" });
     try {
       const vision = await analyzeDirectorVision(runId, provider, script);
       if (vision && vision.trim()) {
-        log(runId, "success", "Director Mode: Directorial Vision Breakdown established and saved to director_vision.md", { stage: "scene_split" });
-        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts to maintain character continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nIMPORTANT NOTE: While visual_prompt must reflect this directorial vision, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.`;
+        log(runId, "success", "🎬 Director Mode Analysis Complete:", { stage: "scene_split" });
+
+        // Output each section of the analysis clearly in the logs so the user sees what the topic is about!
+        const lines = vision.trim().split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.match(/^[0-9#=*-]+\.?\s*(DETECTED|OVERARCHING|STILL|VIDEO|TOPIC|THEME|PROMPTING|CINEMATOGRAPHY)/i) || trimmed.startsWith("#") || trimmed.startsWith("===") || trimmed.startsWith("---")) {
+            log(runId, "info", `   📍 ${trimmed.replace(/^[#=*-\s]+/, "")}`, { stage: "scene_split" });
+          } else {
+            log(runId, "info", `      ${trimmed}`, { stage: "scene_split" });
+          }
+        }
+
+        systemPrompt = `${systemPrompt}\n\n=== DIRECTORIAL VISION BREAKDOWN ===\nYou MUST strictly adhere to the following Directorial Vision Breakdown for all scene visual prompts and motion instructions to maintain topic accuracy, setting continuity, color palette, lighting, and mood across the video:\n\n${vision.trim()}\n\nCRITICAL DIRECTORIAL INSTRUCTIONS:\n1. TOPIC ACCURACY: This script is about the DETECTED TOPIC above. Every scene's "visual_prompt" MUST accurately depict this subject matter with high visual fidelity.\n2. IMAGE & VIDEO PROMPTING: Follow the STILL IMAGE PROMPTING RULES and VIDEO ANIMATION PROMPTING RULES established above for each scene's visual description.\n3. STOCK KEYWORDS: While visual_prompt must be detailed and cinematic, "search_keywords" MUST remain simple 1 to 3 concrete physical nouns (under 3 words) suitable for literal stock footage matching.`;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -324,12 +337,10 @@ function extractJson(text: string): unknown {
 async function analyzeDirectorVision(runId: string, provider: string, script: string): Promise<string> {
   const directorPrompt = getPrompt("director_analysis");
   let raw: string;
-  if (provider === "google") {
-    raw = await splitWithGeminiText(directorPrompt, script);
-  } else if (provider === "anthropic") {
+  if (provider === "anthropic") {
     raw = await splitWithClaude(directorPrompt, script);
   } else {
-    return "";
+    raw = await splitWithGeminiText(directorPrompt, script);
   }
   try {
     const runDir = getRunDir(runId);
