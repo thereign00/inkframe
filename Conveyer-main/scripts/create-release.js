@@ -2,10 +2,20 @@
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
-const TOKEN = process.env.GH_TOKEN;
+const { execSync } = require("child_process");
+function getGitToken() {
+  if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
+  try {
+    const res = execSync("git credential fill", { input: "protocol=https\nhost=github.com\n\n", encoding: "utf8" });
+    const match = res.match(/^password=(.+)$/m);
+    if (match && match[1]) return match[1].trim();
+  } catch {}
+  return null;
+}
+const TOKEN = getGitToken();
 const OWNER = "thereign00";
 const REPO = "inkframe";
-const VERSION = process.argv[2] || "1.0.8";
+const VERSION = process.argv[2] || "1.0.9";
 
 function api(method, urlPath, body) {
   return new Promise((resolve, reject) => {
@@ -58,7 +68,7 @@ async function main() {
   const { status, data } = await api("POST", `/repos/${OWNER}/${REPO}/releases`, {
     tag_name: `v${VERSION}`,
     name: `Inkframe v${VERSION}`,
-    body: `v${VERSION} — Multi-clip continuous animation for long narration, ElevenLabs direct provider option, 69labs flux model fix, and persistent channel settings fix`,
+    body: `v${VERSION} — Live EventSource SSE log streaming, programmatic text overlay rarity filter (3-scene cooldown), and 3.5s text overlay duration limit per scene`,
     draft: false,
     prerelease: false,
   });
