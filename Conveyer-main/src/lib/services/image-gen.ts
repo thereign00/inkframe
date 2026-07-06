@@ -30,14 +30,18 @@ export interface ImageResult {
 export async function generateImage(
   runId: string,
   scene: Scene,
-  outDir: string
+  outDir: string,
+  options: { partNum?: number; promptOverride?: string } = {}
 ): Promise<ImageResult> {
   checkCancelled(runId);
   const provider = (getSetting("IMAGE_PROVIDER") || "69labs").toLowerCase().trim();
   const fallback = (getSetting("IMAGE_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const styleSuffix = getPrompt("image_prompt");
-  const finalPrompt = `${scene.visual_prompt}, ${styleSuffix}`;
-  const fileName = `scene_${String(scene.index).padStart(3, "0")}.png`;
+  const basePrompt = options.promptOverride || scene.visual_prompt;
+  const finalPrompt = `${basePrompt}, ${styleSuffix}`;
+  const fileName = options.partNum
+    ? `scene_${String(scene.index).padStart(3, "0")}_part${options.partNum}.png`
+    : `scene_${String(scene.index).padStart(3, "0")}.png`;
   const filePath = path.join(outDir, fileName);
 
   // Try primary provider first (with key failover for 69labs)

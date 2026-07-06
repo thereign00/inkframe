@@ -7,6 +7,7 @@ import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
+import { generateImage } from "./image-gen";
 
 import { probeDuration, concatSimple } from "./video-assemble";
 
@@ -65,9 +66,9 @@ export async function animateScene(
     );
   }
 
-  const runPart = async (partPath: string) => {
+  const runPart = async (partPath: string, partImgPath: string, partOpts: { providerJobId?: string; imageProvider?: string }) => {
     try {
-      await runAnimWithKeyFailover(runId, provider, scene, imagePath, partPath, options);
+      await runAnimWithKeyFailover(runId, provider, scene, partImgPath, partPath, partOpts);
     } catch (primaryErr) {
       if (primaryErr instanceof CancelledError) throw primaryErr;
       if (!fallback || fallback === "off" || fallback === provider) {
@@ -79,7 +80,7 @@ export async function animateScene(
         { stage: "animate" }
       );
       try {
-        await runAnimWithKeyFailover(runId, fallback, scene, imagePath, partPath, options);
+        await runAnimWithKeyFailover(runId, fallback, scene, partImgPath, partPath, partOpts);
         log(runId, "success", `Animation #${scene.index} recovered via fallback (${fallback})`, { stage: "animate" });
       } catch (fallbackErr) {
         if (fallbackErr instanceof CancelledError) throw fallbackErr;
@@ -94,19 +95,51 @@ export async function animateScene(
   };
 
   if (numClips === 1) {
-    await runPart(filePath);
+    await runPart(filePath, imagePath, options);
   } else {
     const partPaths: string[] = [];
     const partPromises: Promise<void>[] = [];
+    const imgDir = path.dirname(imagePath);
+    const variationPrompts = [
+      "",
+      "different camera angle, next viewpoint, progressive shot",
+      "cinematic close-up, continuing action, detailed perspective",
+      "wide establishing angle, scenic view, ongoing scene",
+    ];
     for (let i = 1; i <= numClips; i++) {
       const pPath = path.join(outDir, `scene_${String(scene.index).padStart(3, "0")}_part${i}.mp4`);
       partPaths.push(pPath);
-      partPromises.push(runPart(pPath));
+      if (i === 1) {
+        partPromises.push(runPart(pPath, imagePath, options));
+      } else {
+        partPromises.push((async () => {
+          let curImgPath = imagePath;
+          let curOpts = { ...options };
+          try {
+            log(runId, "info", `Generating fresh image angle for scene #${scene.index} (part ${i}/${numClips}) to prevent visual repetition...`, { stage: "animate" });
+            const promptSuffix = variationPrompts[Math.min(i - 1, variationPrompts.length - 1)];
+            const newImgRes = await generateImage(runId, scene, imgDir, {
+              partNum: i,
+              promptOverride: `${scene.visual_prompt}, ${promptSuffix}`,
+            });
+            curImgPath = newImgRes.filePath;
+            curOpts = {
+              providerJobId: newImgRes.providerJobId,
+              imageProvider: newImgRes.provider,
+            };
+          } catch (imgErr) {
+            if (imgErr instanceof CancelledError) throw imgErr;
+            const imgMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+            log(runId, "warn", `Could not generate fresh image for scene #${scene.index} part ${i}: ${imgMsg.slice(0, 100)} — falling back to base image`, { stage: "animate" });
+          }
+          await runPart(pPath, curImgPath, curOpts);
+        })());
+      }
     }
     try {
       await Promise.all(partPromises);
       await concatSimple(partPaths, outDir, filePath);
-      log(runId, "info", `Stitched ${numClips} video clips into ${fileName}`, { stage: "animate" });
+      log(runId, "info", `Stitched ${numClips} dynamic video clips into ${fileName}`, { stage: "animate" });
     } finally {
       for (const p of partPaths) {
         try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
