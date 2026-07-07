@@ -15,7 +15,7 @@ function getGitToken() {
 const TOKEN = getGitToken();
 const OWNER = "thereign00";
 const REPO = "inkframe";
-const VERSION = process.argv[2] || "1.0.9";
+const VERSION = process.argv[2] || "1.0.10";
 
 function api(method, urlPath, body) {
   return new Promise((resolve, reject) => {
@@ -68,7 +68,7 @@ async function main() {
   const { status, data } = await api("POST", `/repos/${OWNER}/${REPO}/releases`, {
     tag_name: `v${VERSION}`,
     name: `Inkframe v${VERSION}`,
-    body: `v${VERSION} — Live EventSource SSE log streaming, programmatic text overlay rarity filter (3-scene cooldown), and 3.5s text overlay duration limit per scene`,
+    body: `v${VERSION} — Fix FFmpeg crash on long titles with em-dashes and special characters by storing concat lists in system temporary folder and clamping run folders to 50 ASCII characters`,
     draft: false,
     prerelease: false,
   });
