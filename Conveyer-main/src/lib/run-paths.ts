@@ -36,13 +36,20 @@ export function getRunDir(runId: string): string {
 
 /**
  * Turn a run title into a safe folder name:
- *  - strip Windows-forbidden characters `<>:"/\|?*` and control chars
- *  - clamp to 80 characters
+ *  - replace Unicode dashes/quotes with ASCII equivalents
+ *  - strip non-ASCII and Windows-forbidden characters
+ *  - clamp to 50 characters to avoid Windows MAX_PATH limits
  *  - if empty after sanitization, fall back to the short UUID
  */
 export function sanitizeFolderName(title: string | null | undefined, fallback: string): string {
-  let name = (title ?? "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "").trim();
-  if (name.length > 80) name = name.slice(0, 80).trim();
+  let name = (title ?? "")
+    .replace(/[\u2010-\u2015]/g, "-") // em-dash/en-dash to hyphen
+    .replace(/[\u2018-\u201b]/g, "")  // strip curly apostrophes/quotes
+    .replace(/[\u201c-\u201f]/g, "")
+    .replace(/[^a-zA-Z0-9 _.-]/g, "") // remove non-ASCII and forbidden characters
+    .replace(/\s+/g, " ")
+    .trim();
+  if (name.length > 50) name = name.slice(0, 50).trim();
   return name || fallback;
 }
 

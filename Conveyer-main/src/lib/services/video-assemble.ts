@@ -1,4 +1,5 @@
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs";
 import ffmpeg from "fluent-ffmpeg";
 import { getSetting } from "../settings";
@@ -440,11 +441,20 @@ async function renderAnimatedClip(
   });
 }
 
+/** Helper to create safe temporary concat list files in os.tmpdir() to avoid Windows path limit and ANSI code page errors */
+function createConcatListFile(paths: string[]): string {
+  const tmpDir = os.tmpdir();
+  const listFile = path.join(tmpDir, `inkframe_concat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`);
+  // Escape single quotes in path for FFmpeg concat demuxer: ' becomes '\''
+  const content = paths.map((p) => `file '${p.replace(/\\/g, "/").replace(/'/g, "'\\'''")}'`).join("\n");
+  fs.writeFileSync(listFile, content, "utf-8");
+  return listFile;
+}
+
 /** Simple stream-copy concat (no transitions). */
 export function concatSimple(clipPaths: string[], clipsDir: string, finalPath: string): Promise<void> {
   setupFfmpeg();
-  const listFile = path.join(clipsDir, `concat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`);
-  fs.writeFileSync(listFile, clipPaths.map((p) => `file '${p.replace(/\\/g, "/")}'`).join("\n"), "utf-8");
+  const listFile = createConcatListFile(clipPaths);
   return new Promise((resolve, reject) => {
     ffmpeg()
       .input(listFile)
@@ -625,15 +635,20 @@ async function concatWithCrossfade(
   const safeFade = Math.min(fadeDur, Math.max(0, minClipDur * 0.4));
   if (safeFade < 0.01) {
     // Fade is basically zero — fall back to simple concat
-    const listFile = path.join(path.dirname(finalPath), "concat_fallback.txt");
-    fs.writeFileSync(listFile, clips.map((c) => `file '${c.path.replace(/\\/g, "/")}'`).join("\n"), "utf-8");
+    const listFile = createConcatListFile(clips.map((c) => c.path));
     return new Promise((resolve, reject) => {
       ffmpeg()
         .input(listFile)
         .inputOptions(["-f concat", "-safe 0"])
         .outputOptions(["-c copy"])
-        .on("error", reject)
-        .on("end", () => resolve())
+        .on("error", (err) => {
+          try { fs.unlinkSync(listFile); } catch {}
+          reject(err);
+        })
+        .on("end", () => {
+          try { fs.unlinkSync(listFile); } catch {}
+          resolve();
+        })
         .save(finalPath);
     });
   }
