@@ -28,6 +28,15 @@ if (fs.existsSync(staticSrc)) {
   process.exit(1);
 }
 
+// ── 1a. Clean up accidentally traced output directories in standalone ─────
+["dist-electron", "build", "runs", ".git", "dist"].forEach((dir) => {
+  const target = path.join(root, ".next", "standalone", dir);
+  if (fs.existsSync(target)) {
+    fs.rmSync(target, { recursive: true, force: true });
+    console.log(`✓ Removed accidentally traced ${dir} from standalone`);
+  }
+});
+
 // ── 2. Copy FFmpeg + FFprobe binaries ───────────────────────────────────
 const binDir = path.join(root, "build", "bin");
 fs.mkdirSync(binDir, { recursive: true });
