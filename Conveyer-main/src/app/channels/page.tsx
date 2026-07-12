@@ -28,13 +28,17 @@ const IMAGE_MODELS = [
   { value: "flux-dev", label: "Flux Dev", provider: "kieai" },
   { value: "recraft-v3", label: "Recraft V3", provider: "kieai" },
   { value: "ideogram-v3", label: "Ideogram V3", provider: "kieai" },
+  { value: "qwen-image", label: "Qwen Image", provider: "kieai" },
   // 69labs models
   { value: "nano-banana-pro", label: "Nano Banana Pro", provider: "69labs" },
   { value: "nano-banana", label: "Nano Banana", provider: "69labs" },
+  { value: "qwen-image", label: "Qwen Image (Wanx)", provider: "69labs" },
   { value: "imagen-4", label: "Imagen 4", provider: "69labs" },
   { value: "seedream-4.5", label: "Seedream 4.5", provider: "69labs" },
   { value: "flux-2-pro", label: "Flux 2 Pro", provider: "69labs" },
   { value: "black-forest-labs/flux-schnell", label: "Flux Schnell (69labs)", provider: "69labs" },
+  // ComfyUI models
+  { value: "sdxl-flux", label: "ComfyUI Workflow (SDXL / Flux)", provider: "comfyui" },
 ];
 
 const VIDEO_MODELS = [
@@ -52,6 +56,8 @@ const VIDEO_MODELS = [
   { value: "veo-video", label: "Veo Video", provider: "69labs" },
   { value: "grok-imagine-video", label: "Grok Imagine Video", provider: "69labs" },
   { value: "kwaivgi/kling-v1.6-standard", label: "Kling V1.6 Standard (69labs)", provider: "69labs" },
+  // ComfyUI models
+  { value: "svd-xt", label: "ComfyUI Workflow (SVD Video)", provider: "comfyui" },
 ];
 
 const PROMPT_META: { name: string; label: string; hint: string; rows: number }[] = [
@@ -697,6 +703,7 @@ export default function ChannelsPage() {
                     const PROVIDER_LABELS: Record<string, string> = {
                       kieai: "⚡ KieAI",
                       "69labs": "🔬 69labs",
+                      comfyui: "🎨 ComfyUI",
                       elevenlabs: "🎤 ElevenLabs",
                       off: "🚫 Off",
                     };
@@ -776,13 +783,15 @@ export default function ChannelsPage() {
                           )}
                           {provBtn("🖼️ Images", imgProv, (p) =>
                             updateSingle("IMAGE_PROVIDER", p, {
-                              IMAGE_MODEL: p === "kieai" ? "flux-kontext-pro" : "img-flux",
-                            })
+                              IMAGE_MODEL: p === "kieai" ? "flux-kontext-pro" : p === "comfyui" ? "sdxl-flux" : "img-flux",
+                            }),
+                            ["kieai", "69labs", "comfyui"]
                           )}
                           {provBtn("🎬 Video", animProv, (p) =>
                             updateSingle("ANIMATION_PROVIDER", p, {
-                              ANIMATION_MODEL: p === "kieai" ? "veo3_fast" : "veo-video",
-                            })
+                              ANIMATION_MODEL: p === "kieai" ? "veo3_fast" : p === "comfyui" ? "svd-xt" : "veo-video",
+                            }),
+                            ["kieai", "69labs", "comfyui", "off"]
                           )}
                         </div>
                       </div>
@@ -797,6 +806,7 @@ export default function ChannelsPage() {
                       { value: "", label: "Off" },
                       { value: "kieai", label: "⚡ KieAI" },
                       { value: "69labs", label: "🔬 69labs" },
+                      { value: "comfyui", label: "🎨 ComfyUI" },
                     ];
 
                     const fbBtn = (label: string, key: string, current: string) => (

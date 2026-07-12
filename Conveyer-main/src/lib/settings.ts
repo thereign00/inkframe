@@ -51,16 +51,22 @@ export const SETTING_KEYS = [
   "TTS_PAUSE_FREQUENCY",     // 1–100
 
   // ── Images ────────────────────────────────────────────────────────
-  "IMAGE_PROVIDER",          // 69labs | kieai | replicate | openai | fal
-  "IMAGE_FALLBACK_PROVIDER", // Fallback if primary provider fails (off | 69labs | kieai)
+  "IMAGE_PROVIDER",          // 69labs | kieai | replicate | openai | fal | comfyui
+  "IMAGE_FALLBACK_PROVIDER", // Fallback if primary provider fails (off | 69labs | kieai | comfyui)
   "IMAGE_MODEL",             // e.g. nano-banana-pro, imagen-4, seedream-4.5
   "IMAGE_RATIO",             // e.g. 16:9, 9:16, 1:1
   "IMAGE_RESOLUTION",        // 1k | 2k | 4k (for models that support it)
   "KIEAI_DEFAULT_IMAGE_MODEL", // Default KieAI image model (used during fallback)
 
+  // ── Local ComfyUI (Offline AI Engine) ─────────────────────────────
+  "COMFYUI_URL",             // e.g. http://127.0.0.1:8188
+  "COMFYUI_API_KEY",         // Optional API key for ComfyUI Cloud
+  "COMFYUI_IMAGE_WORKFLOW",  // Custom ComfyUI API JSON for txt2img (empty = default SDXL/Flux)
+  "COMFYUI_VIDEO_WORKFLOW",  // Custom ComfyUI API JSON for img2vid (empty = default SVD)
+
   // ── Animations (img2vid) ──────────────────────────────────────────
-  "ANIMATION_PROVIDER",      // off | 69labs | kieai | replicate | fal
-  "ANIMATION_FALLBACK_PROVIDER", // Fallback if primary animation provider fails (off | 69labs | kieai)
+  "ANIMATION_PROVIDER",      // off | 69labs | kieai | replicate | fal | comfyui
+  "ANIMATION_FALLBACK_PROVIDER", // Fallback if primary animation provider fails (off | 69labs | kieai | comfyui)
   "ANIMATION_MODEL",         // e.g. veo-video, grok-imagine-video
   "ANIMATION_RATIO_PERCENT", // 0–100, percentage of scenes to animate
   "ANIMATION_DISTRIBUTION",  // first-half | alternating | random | all
@@ -70,6 +76,7 @@ export const SETTING_KEYS = [
   "KIEAI_DEFAULT_VIDEO_MODEL", // Default KieAI video model (used during fallback)
   "STOCK_FOOTAGE_RATIO_PERCENT", // 0-100, percentage of scenes to use stock video
   "STOCK_FOOTAGE_PROVIDER",    // all | pixabay | pexels | off
+  "REAL_MATCH_THRESHOLD",      // 0-100 threshold for AI relevance gating of stock footage
 
   // ── Video assembly (FFmpeg) ───────────────────────────────────────
   "VIDEO_RESOLUTION",        // e.g. 1920x1080
@@ -244,13 +251,17 @@ export const DEFAULTS: Record<SettingKey, string> = {
   IMAGE_MODEL: "flux-kontext-pro",
   IMAGE_RATIO: "16:9",
   IMAGE_RESOLUTION: "1k",
+  COMFYUI_URL: "http://127.0.0.1:8188",
+  COMFYUI_API_KEY: "",
+  COMFYUI_IMAGE_WORKFLOW: "",
+  COMFYUI_VIDEO_WORKFLOW: "",
 
   // Animations — KieAI by default; 69labs available per channel
   ANIMATION_PROVIDER: "kieai",
   ANIMATION_FALLBACK_PROVIDER: "",
   ANIMATION_MODEL: "veo-video",
-  ANIMATION_RATIO_PERCENT: "50",
-  ANIMATION_DISTRIBUTION: "first-half",
+  ANIMATION_RATIO_PERCENT: "100",
+  ANIMATION_DISTRIBUTION: "all",
   ANIMATION_DURATION: "5",
   ANIMATION_KEEP_VEO_AUDIO: "",
   VIDEO_QUALITY: "720p",
@@ -258,6 +269,7 @@ export const DEFAULTS: Record<SettingKey, string> = {
   KIEAI_DEFAULT_VIDEO_MODEL: "veo3_fast",
   STOCK_FOOTAGE_RATIO_PERCENT: "0",
   STOCK_FOOTAGE_PROVIDER: "all",
+  REAL_MATCH_THRESHOLD: "65",
 
   // Video assembly
   VIDEO_RESOLUTION: "1920x1080",
@@ -302,6 +314,7 @@ export function seedDefaults() {
  */
 export const CHANNEL_SCOPED_KEYS: SettingKey[] = [
   "IMAGE_PROVIDER", "IMAGE_FALLBACK_PROVIDER", "IMAGE_MODEL", "IMAGE_RATIO", "IMAGE_RESOLUTION",
+  "COMFYUI_IMAGE_WORKFLOW", "COMFYUI_VIDEO_WORKFLOW",
   "TTS_PROVIDER", "TTS_FALLBACK_PROVIDER", "TTS_VOICE_PROVIDER", "TTS_VOICE_ID", "TTS_MODEL", "TTS_SPLIT_TYPE",
   "TTS_SPEED", "TTS_STABILITY", "TTS_SIMILARITY_BOOST", "TTS_STYLE", "TTS_USE_SPEAKER_BOOST",
   "TTS_AUTO_PAUSE", "TTS_PAUSE_DURATION", "TTS_PAUSE_FREQUENCY",

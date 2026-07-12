@@ -9,7 +9,7 @@ import { splitScript, type Scene } from "./services/scene-split";
 import { synthesizeScene, type TtsResult } from "./services/tts";
 import { generateImage, type ImageResult } from "./services/image-gen";
 import { animateScene, pickScenesToAnimate } from "./services/img2vid";
-import { pickScenesForStock, fetchStockVideo } from "./services/stock-video";
+import { pickScenesForStock, fetchStockVideo, clearUsedStockIds } from "./services/stock-video";
 import { assembleVideo, type AssembleInput } from "./services/video-assemble";
 import { getKeyCount, getKeyList, setBatchKey, withSceneKey } from "./services/labs69";
 import { syncRunToDrive } from "./services/run-upload";
@@ -76,6 +76,7 @@ export async function runPipeline(runId: string, script: string) {
 
   try {
     clearCancelled(runId);
+    clearUsedStockIds();
     updateRun.run("running", null, runId);
 
     // Force-sync the active channel's saved settings into the live table
@@ -115,12 +116,13 @@ export async function runPipeline(runId: string, script: string) {
     const BATCH_SIZE = Math.max(5, Number(getSetting("BATCH_SIZE") || "10"));
 
     const animProvider = (getSetting("ANIMATION_PROVIDER") || "69labs").toLowerCase();
-    const animRatio = Number(getSetting("ANIMATION_RATIO_PERCENT") || "50");
-    const animDistRaw = (getSetting("ANIMATION_DISTRIBUTION") || "first-half").toLowerCase();
+    const rawAnimRatio = Number(getSetting("ANIMATION_RATIO_PERCENT") || "100");
+    const animRatio = rawAnimRatio <= 0 ? 100 : rawAnimRatio;
+    const animDistRaw = (getSetting("ANIMATION_DISTRIBUTION") || "all").toLowerCase();
     const animDistribution =
-      animDistRaw === "alternating" || animDistRaw === "random" || animDistRaw === "all"
-        ? (animDistRaw as "alternating" | "random" | "all")
-        : "first-half";
+      animDistRaw === "alternating" || animDistRaw === "random" || animDistRaw === "first-half"
+        ? (animDistRaw as "alternating" | "random" | "first-half")
+        : "all";
     const animTargets =
       animProvider !== "off"
         ? pickScenesToAnimate(scenes, animRatio, animDistribution)

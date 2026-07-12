@@ -7,6 +7,7 @@ import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieImageTask, pollKieTask, downloadKieTask } from "./kieai";
+import { comfyuiImage } from "./comfyui";
 
 export interface ImageResult {
   /** Path to the png file. */
@@ -159,6 +160,8 @@ async function generateWithProvider(
     await openaiImage(prompt, filePath);
   } else if (provider === "fal") {
     await falImage(prompt, filePath);
+  } else if (provider === "comfyui") {
+    await comfyuiImage(runId, prompt, filePath);
   } else {
     throw new Error(`Unknown image provider: ${provider}`);
   }

@@ -8,6 +8,7 @@ import type { Scene } from "./scene-split";
 import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
 import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
 import { generateImage } from "./image-gen";
+import { comfyuiImg2Vid } from "./comfyui";
 
 import { probeDuration, concatSimple } from "./video-assemble";
 
@@ -218,6 +219,8 @@ async function runAnimProvider(
     await replicateImg2Vid(scene, imagePath, filePath);
   } else if (provider === "fal") {
     await falImg2Vid(scene, imagePath, filePath);
+  } else if (provider === "comfyui") {
+    await comfyuiImg2Vid(runId, imagePath, filePath, scene.visual_prompt);
   } else {
     throw new Error(`Unknown animation provider: ${provider}`);
   }

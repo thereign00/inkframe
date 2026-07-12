@@ -227,8 +227,27 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
             {assets.scenes.map((s) => (
               <div key={s.index} style={{ border: "1px solid #232334", borderRadius: 8, padding: 8, background: "#0f0f17" }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Scene #{s.index}</div>
-                {s.image && (
+                <div style={{ fontWeight: 700, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>Scene #{s.index}</span>
+                  {s.animation && (
+                    <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1f1f2e", color: "#a0a0c0" }}>
+                      🎬 Video
+                    </span>
+                  )}
+                </div>
+                {s.animation ? (
+                  <video
+                    controls
+                    src={fileUrl(`animations/${s.animation.name}`)}
+                    style={{ width: "100%", borderRadius: 6, display: "block", maxHeight: 220, background: "#000" }}
+                  />
+                ) : s.clip ? (
+                  <video
+                    controls
+                    src={fileUrl(`clips/${s.clip.name}`)}
+                    style={{ width: "100%", borderRadius: 6, display: "block", maxHeight: 220, background: "#000" }}
+                  />
+                ) : s.image ? (
                   <a href={fileUrl(`images/${s.image.name}`, true)} title="Download image">
                     <img
                       src={fileUrl(`images/${s.image.name}`)}
@@ -236,7 +255,7 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                       style={{ width: "100%", borderRadius: 6, display: "block" }}
                     />
                   </a>
-                )}
+                ) : null}
                 {s.audio && (
                   <audio controls src={fileUrl(`audio/${s.audio.name}`)} style={{ width: "100%", marginTop: 6 }} />
                 )}

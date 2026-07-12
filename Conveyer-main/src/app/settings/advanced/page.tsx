@@ -140,8 +140,8 @@ const GROUPS: Group[] = [
     fields: [
       {
         key: "IMAGE_PROVIDER",
-        desc: "Which service hosts the image model. 69labs is the default — it routes to Google, OpenAI, Black Forest, etc internally with a single key. `kieai` is an alternative unified gateway.",
-        examples: "69labs  /  kieai  /  replicate  /  openai  /  fal",
+        desc: "Which service hosts the image model. 69labs is the default — it routes to Google, OpenAI, Black Forest, etc internally with a single key. `kieai` is an alternative unified gateway. `comfyui` runs 100% locally and free via Pinokio.",
+        examples: "69labs  /  kieai  /  replicate  /  openai  /  fal  /  comfyui",
       },
       {
         key: "IMAGE_MODEL",
@@ -161,13 +161,41 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: "Local ComfyUI (Offline AI Engine)",
+    subtitle: "Run image and video generation 100% locally for zero API costs using ComfyUI via Pinokio. Set IMAGE_PROVIDER and/or ANIMATION_PROVIDER to 'comfyui' above to enable.",
+    fields: [
+      {
+        key: "COMFYUI_URL",
+        desc: "URL of your ComfyUI server. When running locally, it defaults to http://127.0.0.1:8188. If using ComfyUI Cloud, paste your cloud server URL here.",
+        examples: "http://127.0.0.1:8188  or  https://your-cloud-instance.comfy.org",
+      },
+      {
+        key: "COMFYUI_API_KEY",
+        desc: "Optional: API key for authenticating with ComfyUI Cloud or secure remote ComfyUI servers. Leave empty if running locally on your PC.",
+        examples: "comfyui-abc123xxxx...",
+      },
+      {
+        key: "COMFYUI_IMAGE_WORKFLOW",
+        desc: "Optional: Custom ComfyUI API JSON workflow for still images (txt2img). Leave empty to use our automatic built-in SDXL / SD 1.5 default workflow. To use custom nodes, enable 'Save (API Format)' in ComfyUI settings, export JSON, and paste here.",
+        examples: "Paste exported API JSON here  ·  empty = built-in default",
+        multiline: true,
+      },
+      {
+        key: "COMFYUI_VIDEO_WORKFLOW",
+        desc: "Optional: Custom ComfyUI API JSON workflow for video animation (img2vid). Leave empty to use our automatic built-in SVD (Stable Video Diffusion) workflow.",
+        examples: "Paste exported API JSON here  ·  empty = built-in default",
+        multiline: true,
+      },
+    ],
+  },
+  {
     title: "Animations (img2vid)",
     subtitle: "Turns selected images into short video clips with real motion. Optional — leave provider on `off` to keep everything as static Ken-Burns photos.",
     fields: [
       {
         key: "ANIMATION_PROVIDER",
-        desc: "Service for img2vid. `off` skips animation entirely. `69labs` uses Google Veo or xAI Grok. `kieai` routes through Kie AI (Veo/Kling/Runway). `replicate`/`fal` open the door to Kling, Luma, Runway etc.",
-        examples: "off  /  69labs  /  kieai  /  replicate  /  fal",
+        desc: "Service for img2vid. `off` skips animation entirely. `69labs` uses Google Veo or xAI Grok. `kieai` routes through Kie AI (Veo/Kling/Runway). `replicate`/`fal` open the door to Kling, Luma, Runway etc. `comfyui` runs locally for free.",
+        examples: "off  /  69labs  /  kieai  /  replicate  /  fal  /  comfyui",
       },
       {
         key: "ANIMATION_MODEL",
