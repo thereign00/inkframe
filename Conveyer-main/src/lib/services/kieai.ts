@@ -370,8 +370,7 @@ export async function createKieVideoTask(opts: {
     if (opts.imageUrl) body.image = opts.imageUrl;
     if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio;
     if (opts.duration) body.duration = opts.duration;
-  } else {
-    // Runway / other models — generic fallback
+  } else if (model.startsWith("runway") || model.includes("runway")) {
     endpoint = "/runway/generate";
     pollEndpoint = "/runway/record-info";
     body.quality = opts.quality || "720p";
@@ -380,6 +379,18 @@ export async function createKieVideoTask(opts: {
     }
     if (opts.aspectRatio) body.aspectRatio = opts.aspectRatio;
     if (opts.duration) body.duration = opts.duration;
+  } else {
+    // All other models (grok-imagine-video, grok, sora, luma, pika, etc.)
+    // use the generic jobs endpoint exactly like createKieImageTask
+    endpoint = "/jobs/createTask";
+    pollEndpoint = "/jobs/recordInfo";
+    body.model = model;
+    const input: Record<string, unknown> = { prompt: opts.prompt };
+    if (opts.aspectRatio) input.aspect_ratio = opts.aspectRatio;
+    if (opts.imageUrl) input.image = opts.imageUrl;
+    if (opts.duration) input.duration = opts.duration;
+    body.input = input;
+    delete body.prompt;
   }
 
   const { json, usedKey } = await postJsonRaw(endpoint, body, ctx);

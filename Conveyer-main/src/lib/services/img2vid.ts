@@ -359,11 +359,10 @@ async function kieaiImg2Vid(
   const KIE_VIDEO_MODEL_MAP: Record<string, string> = {
     "veo-video": "veo3_fast",
     "veo": "veo3_fast",
-    "grok-imagine-video": "veo3_fast",
   };
 
   let model: string;
-  const is69labsSpecificVideoModel = ["veo-video", "grok-imagine-video", "veo3lite", "veo"].includes(rawModel);
+  const is69labsSpecificVideoModel = ["veo-video", "veo3lite", "veo"].includes(rawModel);
   if (primaryProvider === "kieai") {
     if (rawModel && !is69labsSpecificVideoModel) {
       model = KIE_VIDEO_MODEL_MAP[rawModel] || rawModel;
