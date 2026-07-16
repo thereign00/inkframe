@@ -39,14 +39,10 @@ function getServerJs(): string {
 }
 
 function getDataDir(): string {
-  // In dev mode, keep using the existing data dir for backward compat
-  if (isDev) {
-    const os = require("os");
-    return path.join(os.homedir(), ".conveyer-isabell");
-  }
-  // In production, use Electron's per-app userData path
-  // Windows: C:\Users\<user>\AppData\Roaming\Inkframe\
-  return app.getPath("userData");
+  // Always use ~/.conveyer-isabell across both dev and desktop production modes
+  // so that settings, API keys, channels, and saved data are unified and shared.
+  const os = require("os");
+  return process.env.ISABELL_DATA_DIR ?? path.join(os.homedir(), ".conveyer-isabell");
 }
 
 function getFFmpegPath(): string | null {
