@@ -29,6 +29,8 @@ export const SETTING_KEYS = [
   "SCENE_SPLIT_PROVIDER",    // google | anthropic
   "SCENE_SPLIT_MODEL",       // e.g. gemini-flash-latest, claude-sonnet-4-6
   "DIRECTOR_MODE",           // "1" to enable holistic story analysis before scene breakdown
+  "DIRECTOR_PROMPT",         // Custom instructions for the AI Director when planning videos & handling errors
+  "INTRO_HOOK_PERCENT",      // Percentage of initial scenes with rapid intro pacing & title cards (0-40, default 10)
 
   // ── Text-to-Speech ────────────────────────────────────────────────
   "TTS_PROVIDER",            // 69labs | kieai | elevenlabs | openai
@@ -77,6 +79,8 @@ export const SETTING_KEYS = [
   "STOCK_FOOTAGE_RATIO_PERCENT", // 0-100, percentage of scenes to use stock video
   "STOCK_FOOTAGE_PROVIDER",    // all | pixabay | pexels | off
   "REAL_MATCH_THRESHOLD",      // 0-100 threshold for AI relevance gating of stock footage
+  "REAL_IMAGE_RATIO_PERCENT",  // 0-100, percentage of scenes to use verified real images (Wikimedia/NASA)
+  "REAL_IMAGE_PROVIDER",       // all | wikimedia | nasa | off
 
   // ── Video assembly (FFmpeg) ───────────────────────────────────────
   "VIDEO_RESOLUTION",        // e.g. 1920x1080
@@ -222,6 +226,8 @@ export const DEFAULTS: Record<SettingKey, string> = {
   SCENE_SPLIT_PROVIDER: "google",
   SCENE_SPLIT_MODEL: "gemini-flash-latest",
   DIRECTOR_MODE: "0",
+  DIRECTOR_PROMPT: "",
+  INTRO_HOOK_PERCENT: "10",
 
   // TTS — default runs through KieAI's ElevenLabs gateway.
   // 69labs is still available as an alternative (set TTS_PROVIDER to "69labs").
@@ -270,6 +276,8 @@ export const DEFAULTS: Record<SettingKey, string> = {
   STOCK_FOOTAGE_RATIO_PERCENT: "0",
   STOCK_FOOTAGE_PROVIDER: "all",
   REAL_MATCH_THRESHOLD: "65",
+  REAL_IMAGE_RATIO_PERCENT: "0",
+  REAL_IMAGE_PROVIDER: "all",
 
   // Video assembly
   VIDEO_RESOLUTION: "1920x1080",
@@ -322,5 +330,17 @@ export const CHANNEL_SCOPED_KEYS: SettingKey[] = [
   "ANIMATION_DISTRIBUTION", "ANIMATION_DURATION", "ANIMATION_KEEP_VEO_AUDIO",
   "VIDEO_QUALITY",
   "KIEAI_DEFAULT_IMAGE_MODEL", "KIEAI_DEFAULT_VIDEO_MODEL",
-  "DIRECTOR_MODE", "STOCK_FOOTAGE_RATIO_PERCENT", "STOCK_FOOTAGE_PROVIDER",
+  "DIRECTOR_MODE", "DIRECTOR_PROMPT", "INTRO_HOOK_PERCENT", "STOCK_FOOTAGE_RATIO_PERCENT", "STOCK_FOOTAGE_PROVIDER",
 ];
+
+/** Retrieve run-specific director notes from config_json if provided by user on run creation */
+export function getRunDirectorNotes(runId: string): string {
+  try {
+    const row = db.prepare("SELECT config_json FROM runs WHERE id = ?").get(runId) as { config_json?: string } | undefined;
+    if (row?.config_json) {
+      const parsed = JSON.parse(row.config_json);
+      return (parsed.directorNotes || "").trim();
+    }
+  } catch {}
+  return "";
+}

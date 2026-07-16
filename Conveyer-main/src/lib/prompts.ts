@@ -17,12 +17,12 @@ CRITICAL RULES:
 1. Cover the ENTIRE script verbatim, with NO omissions, no summarizing, no paraphrasing.
 2. The concatenation of every scene's "text" field (joined by spaces) MUST equal the original script word-for-word.
 3. Do NOT summarize. Do NOT add commentary. Do NOT reorder words.
-4. **NEVER split a sentence in the middle.** A sentence ends ONLY at a period (.), question mark (?), or exclamation mark (!). Commas, semicolons, dashes, and colons are NOT sentence boundaries — they MUST stay inside one scene.
-5. **TARGET SCENE LENGTH: 8–18 words, ~50–110 characters, ~3.5–7.5 seconds of narration.**
-6. **HARD MAX: 22 words / 140 characters / ~9 seconds per scene.** Going past 9 s of audio means the Veo clip can't cover the scene with motion. If a single sentence is naturally longer than 22 words, give it its own scene (rule 4 takes priority — never split mid-sentence).
-7. **Prefer 1 sentence per scene.** Use 2 sentences only when both are short (under 12 words combined).
+4. **NEVER split a sentence right in the middle of a tight phrase.** A sentence ends at a period (.), question mark (?), or exclamation mark (!).
+5. **TARGET SCENE LENGTH: 6–13 words, ~30–75 characters, ~2.5–5.0 seconds of narration.**
+6. **HARD MAX: 15 words / 90 characters / ~6 seconds per scene.** We strictly forbid any scene from having spoken audio longer than 6 seconds! If a single sentence runs over 15 words (~6 seconds of speech), break it across multiple scenes at a natural clause pause, comma, or conjunction so every single audio clip stays under 6 seconds!
+7. **Prefer 1 short sentence or clause per scene.** Use 2 sentences only when both are extremely brief (under 10 words combined).
 8. Section headings ("Part one. The configuration.") get their own short scene.
-9. Long single sentences are OK as standalone scenes, but flag them — they will look near-frozen at the end.
+9. Keep narration fast, dynamic, and engaging with tight visual pacing.
 
 For EACH scene, return a JSON object with:
 - "text": the exact verbatim slice of the script (no edits, no punctuation changes).
@@ -33,13 +33,13 @@ For EACH scene, return a JSON object with:
   • NO modern recognizable human faces in close-up unless essential. Prefer wide cinematic shots, atmospheric B-roll, over-the-shoulder perspectives, macro details, or silhouettes.
   • Photorealistic style (style is appended later — just write the SUBSTANCE of the shot).
   • Describe MOTION too — Veo generates 8-second clips, so include subtle camera motion (slow zoom, drift, parallax, tracking shot). Example: "slow pan across ancient stone columns at dawn, warm sunlight filtering through mist".
-- "search_keywords": 1 to 3 literal, concrete English visual nouns representing tangible physical objects or actions (e.g. "coffee cup close", "man typing laptop", "rain window", "ancient ruins"). MUST BE UNDER 3 WORDS. Do NOT use abstract concepts, full sentences, or poetic words, because stock libraries like Pexels/Pixabay only match basic literal nouns.
-- "duration_hint_sec": approximate audio length (number, 3–9).
+- "search_keywords": 1 to 4 literal, concrete English visual proper nouns or physical subjects (e.g. "Albert Einstein portrait", "Cassini Saturn storm", "James Webb Space Telescope", "coffee cup close"). Use exact real names of scientists, planets, telescopes, missions, or historical objects whenever the scene references factual discovery data or real science/history, so verified photographs can be retrieved from NASA or Wikimedia Commons.
+- "duration_hint_sec": approximate audio length (number, 2.5–6).
 - "overlay_text": STRICTLY RARE on-screen text (2–5 words). LEAVE NULL / OMIT for at least 80% to 90% of scenes! ONLY populate this field if the scene introduces a MAJOR chapter/section heading (e.g. "PART 1: THE ANOMALY") or highlights a critical statistical milestone (e.g. "$45 BILLION" or "THE YEAR 1984"). For normal explanation, narration, or dialogue scenes, this MUST BE null.
 
 Return a STRICTLY valid JSON array — no markdown, no explanations.
 
-For a ~1500-word script expect ~80–130 scenes. For a ~700-word script expect ~40–60 scenes. If any "text" field is longer than 140 characters, you missed the limit — recount and re-split.`,
+For a ~1500-word script expect ~120–200 scenes. For a ~700-word script expect ~60–95 scenes. If any "text" field is longer than 95 characters (~15 words / 6s), you missed the limit — recount and re-split.`,
 
   image_prompt: `documentary photography, photoreal, cinematic B-roll style, hyper-real and grounded, professional high-fidelity cinematography, natural color grading, dramatic cinematic lighting, 16:9 aspect, sharp focus, depth of field, no text overlays, no watermarks, no logos, no distorted human faces or extra limbs, no sci-fi stylization unless requested by topic, no fantasy elements, no painterly artwork`,
 

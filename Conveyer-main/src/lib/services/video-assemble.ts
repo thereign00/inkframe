@@ -13,6 +13,8 @@ export interface AssembleInput {
   imagePath: string;
   videoPath?: string | null;
   audio: TtsResult;
+  realImageTag?: string;
+  motionType?: "zoom-in" | "zoom-out" | "slide-up" | "slide-down" | "slide-left" | "slide-right";
 }
 
 /**
@@ -99,16 +101,59 @@ export async function assembleVideo(
         // scenes get a natural breath between them after concat.
         const clipDuration = audioDuration + tailSilence;
         const overlayText = item.scene.overlay_text;
-        if (item.videoPath) {
-          await renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, keepVideoAudio, overlayText);
-        } else {
-          const zoomDirection: "in" | "out" = Math.random() < 0.5 ? "in" : "out";
-          await renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, zoomDirection, tailSilence, overlayText);
+        const realImageTag = item.realImageTag;
+        if (!item.videoPath && item.imagePath && fs.existsSync(item.imagePath)) {
+          try {
+            const stat = fs.statSync(item.imagePath);
+            if (stat.size > 10 * 1024 * 1024) {
+              const sharp = (await import("sharp")).default;
+              const cleanBuffer = await sharp(item.imagePath, { limitInputPixels: false })
+                .resize({ width: 3840, height: 2160, fit: "inside", withoutEnlargement: true })
+                .jpeg({ quality: 90 })
+                .toBuffer();
+              fs.writeFileSync(item.imagePath, cleanBuffer);
+              log(runId, "info", `⚡ Downscaled oversized (${Math.round(stat.size/1024/1024)}MB) image for Clip #${item.scene.index} before rendering`, { stage: "assemble" });
+            }
+          } catch {}
+        }
+
+        let clipRendered = false;
+        if (item.videoPath && fs.existsSync(item.videoPath)) {
+          try {
+            await Promise.race([
+              renderAnimatedClip(item.videoPath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, keepVideoAudio, overlayText, realImageTag),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Video clip render timeout after 120s")), 120000))
+            ]);
+            clipRendered = true;
+          } catch (vidErr) {
+            log(runId, "warn", `⚠ Video render failed/timed out for Clip #${item.scene.index} (${vidErr instanceof Error ? vidErr.message : String(vidErr)}). Falling back to Ken-Burns image render.`, { stage: "assemble" });
+          }
+        }
+
+        if (!clipRendered) {
+          const motionOptions: ("zoom-in" | "zoom-out" | "slide-up" | "slide-down" | "slide-left" | "slide-right")[] = [
+            "zoom-in", "zoom-out", "slide-up", "slide-down", "slide-left", "slide-right"
+          ];
+          const chosenMotion = item.motionType || motionOptions[Math.floor(Math.random() * motionOptions.length)];
+          try {
+            await Promise.race([
+              renderKenBurnsClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, chosenMotion, tailSilence, overlayText, realImageTag),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Ken-Burns render timeout after 120s")), 120000))
+            ]);
+          } catch (kbErr) {
+            log(runId, "warn", `⚠ Ken-Burns render failed/timed out for Clip #${item.scene.index} (${kbErr instanceof Error ? kbErr.message : String(kbErr)}). Using static image fallback render without zoompan.`, { stage: "assemble" });
+            try {
+              await renderStaticClip(item.imagePath, item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, overlayText, realImageTag);
+            } catch (staticErr) {
+              log(runId, "warn", `⚠ Static image render failed for Clip #${item.scene.index} (${staticErr instanceof Error ? staticErr.message : String(staticErr)}). Using black frame audio failsafe so pipeline never crashes.`, { stage: "assemble" });
+              await renderBlackClip(item.audio.filePath, clipPath, w, h, fps, clipDuration, tailSilence, overlayText);
+            }
+          }
         }
         log(
           runId,
           "info",
-          `Clip #${item.scene.index} (${audioDuration.toFixed(1)}s audio + ${tailSilence}s silence = ${clipDuration.toFixed(1)}s, ${item.videoPath ? "img2vid" : "ken-burns"}${overlayText ? `, text: "${overlayText}"` : ""}) done`,
+          `Clip #${item.scene.index} (${audioDuration.toFixed(1)}s audio + ${tailSilence}s silence = ${clipDuration.toFixed(1)}s, ${item.videoPath ? "img2vid" : "ken-burns"}${overlayText ? `, text: "${overlayText}"` : ""}${realImageTag ? `, badge: "${realImageTag}"` : ""}) done`,
           { stage: "assemble" }
         );
         return { path: clipPath, durationSec: clipDuration, index: item.scene.index };
@@ -200,11 +245,29 @@ export function probeDuration(filePath: string): Promise<number> {
   });
 }
 
+/** Probes whether the file has at least one audio stream. */
+export function hasAudioStream(filePath: string): Promise<boolean> {
+  setupFfmpeg();
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(filePath, (err, data) => {
+      if (err || !data || !Array.isArray(data.streams)) return resolve(false);
+      resolve(data.streams.some((s) => s.codec_type === "audio"));
+    });
+  });
+}
+
 function getDrawtextFilter(text: string, h: number): string {
   const clean = text.replace(/\\/g, "\\\\").replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
   const fontSize = Math.round(h * 0.055);
   // Limit display to the first 3.5 seconds so text doesn't linger across multi-part clips
   return `drawtext=text='${clean}':fontcolor=white:fontsize=${fontSize}:x=(w-text_w)/2:y=h*0.82:box=1:boxcolor=black@0.6:boxborderw=10:enable='lte(t,3.5)'`;
+}
+
+function getRealImageTagFilter(tagText: string, h: number): string {
+  const clean = tagText.replace(/\\/g, "\\\\").replace(/'/g, "'\\\\''").replace(/:/g, "\\:");
+  const fontSize = Math.round(h * 0.021);
+  // Positioned neatly at top-left: x=w*0.025, y=h*0.025. Compact semi-transparent black box.
+  return `drawtext=text='${clean}':fontcolor=white:fontsize=${fontSize}:x=w*0.025:y=h*0.025:box=1:boxcolor=black@0.65:boxborderw=4`;
 }
 
 /**
@@ -219,48 +282,67 @@ function renderKenBurnsClip(
   h: number,
   fps: number,
   durationSec: number,
-  direction: "in" | "out",
+  direction: "in" | "out" | "zoom-in" | "zoom-out" | "slide-up" | "slide-down" | "slide-left" | "slide-right",
   tailSilenceSec: number = 0,
-  overlayText?: string
+  overlayText?: string,
+  realImageTag?: string
 ): Promise<void> {
   const totalFrames = Math.max(2, Math.ceil(durationSec * fps));
   const minZoom = 1.0;
   const maxZoom = 1.18;
 
-  // zoom expression — linear interpolation through `on` (output frame index)
-  const zoomExpr =
-    direction === "in"
-      ? `min(${minZoom}+(${maxZoom}-${minZoom})*on/${totalFrames - 1},${maxZoom})`
-      : `max(${maxZoom}-(${maxZoom}-${minZoom})*on/${totalFrames - 1},${minZoom})`;
-
-  // Slight random pan: choose one of 5 trajectories
-  const panChoice = Math.floor(Math.random() * 5);
-  let xExpr = `iw/2-(iw/zoom/2)`; // center
+  let zoomExpr = `min(${minZoom}+(${maxZoom}-${minZoom})*on/${totalFrames - 1},${maxZoom})`;
+  let xExpr = `iw/2-(iw/zoom/2)`;
   let yExpr = `ih/2-(ih/zoom/2)`;
-  switch (panChoice) {
-    case 1: // top-left → bottom-right drift
-      xExpr = `(iw-iw/zoom)*on/${totalFrames - 1}`;
-      yExpr = `(ih-ih/zoom)*on/${totalFrames - 1}`;
+
+  let motion = direction;
+  if (motion === "in") motion = "zoom-in";
+  if (motion === "out") motion = "zoom-out";
+
+  switch (motion) {
+    case "zoom-in":
+      zoomExpr = `min(${minZoom}+(${maxZoom}-${minZoom})*on/${totalFrames - 1},${maxZoom})`;
+      xExpr = `iw/2-(iw/zoom/2)`;
+      yExpr = `ih/2-(ih/zoom/2)`;
       break;
-    case 2: // top-right → bottom-left
-      xExpr = `(iw-iw/zoom)*(1-on/${totalFrames - 1})`;
-      yExpr = `(ih-ih/zoom)*on/${totalFrames - 1}`;
+    case "zoom-out":
+      zoomExpr = `max(${maxZoom}-(${maxZoom}-${minZoom})*on/${totalFrames - 1},${minZoom})`;
+      xExpr = `iw/2-(iw/zoom/2)`;
+      yExpr = `ih/2-(ih/zoom/2)`;
       break;
-    case 3: // bottom-left → top-right
-      xExpr = `(iw-iw/zoom)*on/${totalFrames - 1}`;
+    case "slide-up":
+      zoomExpr = `1.16`;
+      xExpr = `iw/2-(iw/zoom/2)`;
       yExpr = `(ih-ih/zoom)*(1-on/${totalFrames - 1})`;
       break;
-    case 4: // bottom-right → top-left
-      xExpr = `(iw-iw/zoom)*(1-on/${totalFrames - 1})`;
-      yExpr = `(ih-ih/zoom)*(1-on/${totalFrames - 1})`;
+    case "slide-down":
+      zoomExpr = `1.16`;
+      xExpr = `iw/2-(iw/zoom/2)`;
+      yExpr = `(ih-ih/zoom)*on/${totalFrames - 1}`;
       break;
-    // case 0 — center, no pan
+    case "slide-left":
+      zoomExpr = `1.16`;
+      xExpr = `(iw-iw/zoom)*(1-on/${totalFrames - 1})`;
+      yExpr = `ih/2-(ih/zoom/2)`;
+      break;
+    case "slide-right":
+      zoomExpr = `1.16`;
+      xExpr = `(iw-iw/zoom)*on/${totalFrames - 1}`;
+      yExpr = `ih/2-(ih/zoom/2)`;
+      break;
+    default:
+      zoomExpr = `min(${minZoom}+(${maxZoom}-${minZoom})*on/${totalFrames - 1},${maxZoom})`;
+      xExpr = `iw/2-(iw/zoom/2)`;
+      yExpr = `ih/2-(ih/zoom/2)`;
   }
 
-  // Upscale the input ×2 so the zoom doesn't blur
-  let filter = `scale=${w * 2}:${h * 2}:flags=lanczos,zoompan=z='${zoomExpr}':x='${xExpr}':y='${yExpr}':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
+  // Normalize input format and upscale/crop before zoompan to prevent filter network reinitialization errors on alpha/indexed PNGs!
+  let filter = `format=rgba,scale=${w * 2}:${h * 2}:force_original_aspect_ratio=increase,crop=${w * 2}:${h * 2},zoompan=z='${zoomExpr}':x='${xExpr}':y='${yExpr}':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
   if (overlayText) {
     filter = `${filter},${getDrawtextFilter(overlayText, h)}`;
+  }
+  if (realImageTag) {
+    filter = `${filter},${getRealImageTagFilter(realImageTag, h)}`;
   }
 
   return new Promise((resolve, reject) => {
@@ -278,6 +360,95 @@ function renderKenBurnsClip(
     cmd
       .outputOptions([
         `-r ${fps}`,
+        `-t ${durationSec.toFixed(3)}`,
+        "-c:v libx264",
+        "-preset veryfast",
+        "-crf 23",
+        "-pix_fmt yuv420p",
+        "-c:a aac",
+        "-b:a 192k",
+        "-movflags +faststart",
+      ])
+      .on("error", reject)
+      .on("end", () => resolve())
+      .save(outPath);
+  });
+}
+
+/** Static image clip: simple scale and crop without zoompan or dynamic expressions */
+async function renderStaticClip(
+  imagePath: string,
+  audioPath: string,
+  outPath: string,
+  w: number,
+  h: number,
+  fps: number,
+  durationSec: number,
+  tailSilenceSec: number = 0,
+  overlayText?: string,
+  realImageTag?: string
+): Promise<void> {
+  let filter = `format=rgba,scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`;
+  if (overlayText) {
+    filter = `${filter},${getDrawtextFilter(overlayText, h)}`;
+  }
+  if (realImageTag) {
+    filter = `${filter},${getRealImageTagFilter(realImageTag, h)}`;
+  }
+
+  return new Promise((resolve, reject) => {
+    const cmd = ffmpeg()
+      .input(imagePath)
+      .inputOptions(["-loop 1"])
+      .input(audioPath)
+      .videoFilters(filter);
+    if (tailSilenceSec > 0) {
+      cmd.audioFilters(`apad`);
+    }
+    cmd
+      .outputOptions([
+        `-r ${fps}`,
+        `-t ${durationSec.toFixed(3)}`,
+        "-c:v libx264",
+        "-preset veryfast",
+        "-crf 23",
+        "-pix_fmt yuv420p",
+        "-c:a aac",
+        "-b:a 192k",
+        "-movflags +faststart",
+      ])
+      .on("error", reject)
+      .on("end", () => resolve())
+      .save(outPath);
+  });
+}
+
+/** Black audio clip failsafe: solid black video frame with audio so pipeline never crashes on corrupt image files */
+async function renderBlackClip(
+  audioPath: string,
+  outPath: string,
+  w: number,
+  h: number,
+  fps: number,
+  durationSec: number,
+  tailSilenceSec: number = 0,
+  overlayText?: string
+): Promise<void> {
+  let filter = `format=yuv420p`;
+  if (overlayText) {
+    filter = `${filter},${getDrawtextFilter(overlayText, h)}`;
+  }
+  return new Promise((resolve, reject) => {
+    const cmd = ffmpeg()
+      .input(`color=c=black:s=${w}x${h}:r=${fps}`)
+      .inputOptions(["-f lavfi"])
+      .input(audioPath)
+      .videoFilters(filter);
+    if (tailSilenceSec > 0) {
+      cmd.audioFilters(`apad`);
+    }
+    cmd
+      .outputOptions([
         `-t ${durationSec.toFixed(3)}`,
         "-c:v libx264",
         "-preset veryfast",
@@ -322,7 +493,8 @@ async function renderAnimatedClip(
   durationSec: number,
   tailSilenceSec: number = 0,
   keepVideoAudio: boolean = false,
-  overlayText?: string
+  overlayText?: string,
+  realImageTag?: string
 ): Promise<void> {
   const videoDur = await probeDuration(videoPath);
 
@@ -352,20 +524,19 @@ async function renderAnimatedClip(
   if (overlayText) {
     videoFilter = `${videoFilter},${getDrawtextFilter(overlayText, h)}`;
   }
+  if (realImageTag) {
+    videoFilter = `${videoFilter},${getRealImageTagFilter(realImageTag, h)}`;
+  }
+
+  const videoHasAudio = keepVideoAudio ? await hasAudioStream(videoPath) : false;
 
   return new Promise((resolve, reject) => {
     const cmd = ffmpeg()
       .input(videoPath)
       .input(audioPath);
 
-    if (keepVideoAudio) {
+    if (videoHasAudio) {
       // Mix TTS (input 1) at full volume + video audio (input 0) at 30% volume.
-      // amix produces a combined track so both narration and ambient/SFX are heard.
-      // The video audio might not exist — ffmpeg will just use TTS if it fails.
-      //
-      // IMPORTANT: video filter is included in the complexFilter chain (not as a
-      // separate -vf flag) because -vf and -filter_complex are mutually exclusive
-      // in ffmpeg and using both causes undefined behavior.
       const padFilter = tailSilenceSec > 0
         ? `apad,`
         : "";
@@ -411,8 +582,8 @@ async function renderAnimatedClip(
 
     cmd
       .on("error", (err) => {
-        // If mixing fails (video has no audio track), retry without mixing
-        if (keepVideoAudio && String(err).includes("Stream map")) {
+        // If complex mixing or any filter fails, retry safely with clean TTS-only map
+        if (videoHasAudio) {
           const fallback = ffmpeg()
             .input(videoPath)
             .input(audioPath)
@@ -663,37 +834,36 @@ async function concatWithCrossfade(
   // cumulative fade overlap so far. We subtract a safety margin (50ms) from
   // each offset to prevent floating-point rounding from exceeding the
   // available timeline.
+  let normChain = "";
+  for (let i = 0; i < clips.length; i++) {
+    normChain += `[${i}:v]setsar=1,fps=${fps},format=yuv420p[nv${i}];`;
+  }
+
   let videoChain = "";
-  let lastV = "0:v";
+  let lastV = "nv0";
   let cumOffset = 0;
   const SAFETY_MARGIN = 0.05;  // 50ms headroom per xfade
 
   for (let i = 1; i < clips.length; i++) {
     cumOffset += actualDurations[i - 1] - safeFade;
-    // Ensure offset is always positive and within bounds
     cumOffset = Math.max(0, cumOffset - SAFETY_MARGIN);
     const vOut = `v${i}`;
-    videoChain += `[${lastV}][${i}:v]xfade=transition=fade:duration=${safeFade.toFixed(3)}:offset=${cumOffset.toFixed(3)}[${vOut}];`;
+    videoChain += `[${lastV}][nv${i}]xfade=transition=fade:duration=${safeFade.toFixed(3)}:offset=${cumOffset.toFixed(3)}[${vOut}];`;
     lastV = vOut;
-    // Restore the margin we subtracted (so next offset calc is correct)
     cumOffset += SAFETY_MARGIN;
   }
 
-  // ── Audio: simple concat (most robust approach) ───────────────────────
-  // Previous approach used atrim+afade+aresample per clip which was fragile.
-  // concat filter handles format differences automatically.
   let audioChain = "";
   const audioLabels: string[] = [];
   for (let i = 0; i < clips.length; i++) {
     const aLabel = `a${i}`;
-    // Normalize each audio to same format: 44100Hz stereo, then label it
     audioChain += `[${i}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[${aLabel}];`;
     audioLabels.push(`[${aLabel}]`);
   }
   const concatAudioLabel = "aout";
   audioChain += `${audioLabels.join("")}concat=n=${clips.length}:v=0:a=1[${concatAudioLabel}]`;
 
-  const filterComplex = videoChain + audioChain;
+  const filterComplex = normChain + videoChain + audioChain;
 
   return new Promise((resolve, reject) => {
     cmd
@@ -710,7 +880,28 @@ async function concatWithCrossfade(
         "-b:a 192k",
         "-movflags +faststart",
       ])
-      .on("error", reject)
+      .on("error", (err) => {
+        // Fallback to robust normalized concat if xfade encounters any filter error
+        const fallbackListFile = createConcatListFile(clips.map((c) => c.path));
+        ffmpeg()
+          .input(fallbackListFile)
+          .inputOptions(["-f concat", "-safe 0"])
+          .outputOptions([
+            `-r ${fps}`,
+            "-c:v libx264", "-preset veryfast", "-crf 22",
+            "-pix_fmt yuv420p", "-c:a aac", "-b:a 192k",
+            "-movflags +faststart",
+          ])
+          .on("error", (fbErr) => {
+            try { fs.unlinkSync(fallbackListFile); } catch {}
+            reject(fbErr);
+          })
+          .on("end", () => {
+            try { fs.unlinkSync(fallbackListFile); } catch {}
+            resolve();
+          })
+          .save(finalPath);
+      })
       .on("end", () => resolve())
       .save(finalPath);
   });

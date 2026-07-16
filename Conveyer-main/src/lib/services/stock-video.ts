@@ -8,14 +8,22 @@ import { type Scene } from "./scene-split";
 /**
  * Selects scene indices that should use real stock footage based on the configured ratio percentage.
  */
-export function pickScenesForStock(scenes: Scene[], ratioPercent: number): Set<number> {
-  if (ratioPercent >= 100) return new Set(scenes.map((s) => s.index));
-  if (ratioPercent <= 0) return new Set();
-  const target = Math.max(1, Math.round((scenes.length * ratioPercent) / 100));
-  const step = scenes.length / target;
+export function pickScenesForStock(
+  scenes: Scene[],
+  ratioPercent: number,
+  excludeIndices = new Set<number>()
+): Set<number> {
+  const available = scenes.filter((s) => !excludeIndices.has(s.index));
+  if (ratioPercent >= 100) return new Set(available.map((s) => s.index));
+  if (ratioPercent <= 0 || available.length === 0) return new Set();
+  const target = Math.max(1, Math.round((available.length * ratioPercent) / 100));
+  const step = available.length / target;
   const picks = new Set<number>();
-  for (let i = 0; picks.size < target && i < scenes.length; i++) {
-    picks.add(Math.floor(i * step));
+  for (let i = 0; picks.size < target && i < available.length; i++) {
+    const idx = Math.floor(i * step);
+    if (available[idx]) {
+      picks.add(available[idx].index);
+    }
   }
   return picks;
 }

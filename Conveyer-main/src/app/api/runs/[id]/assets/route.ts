@@ -35,10 +35,34 @@ export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) 
     if (!scenes.has(i)) scenes.set(i, { index: i });
     return scenes.get(i)!;
   }
+  const validExtensions = {
+    audio: new Set([".mp3", ".wav", ".aac", ".m4a"]),
+    image: new Set([".jpg", ".jpeg", ".png", ".webp"]),
+    animation: new Set([".mp4", ".webm", ".mov"]),
+    clip: new Set([".mp4", ".webm", ".mov"]),
+  };
+
   function scanDir(sub: string, key: "audio" | "image" | "animation" | "clip") {
     const dir = path.join(runDir, sub);
     if (!fs.existsSync(dir)) return;
-    for (const f of fs.readdirSync(dir)) {
+    const files = fs.readdirSync(dir);
+
+    // For images, sort so that real photographs (.jpg/.jpeg/_clean.jpg) come after .png,
+    // ensuring they take priority in ensureScene(idx).image over any fallback .png!
+    if (key === "image") {
+      files.sort((a, b) => {
+        const extA = path.extname(a).toLowerCase();
+        const extB = path.extname(b).toLowerCase();
+        const scoreA = (extA === ".jpg" || extA === ".jpeg") ? (a.includes("_clean") ? 3 : 2) : 1;
+        const scoreB = (extB === ".jpg" || extB === ".jpeg") ? (b.includes("_clean") ? 3 : 2) : 1;
+        return scoreA - scoreB;
+      });
+    }
+
+    for (const f of files) {
+      const ext = path.extname(f).toLowerCase();
+      if (!validExtensions[key].has(ext)) continue;
+
       const m = f.match(/(?:scene|clip)_(\d+)\./);
       if (!m) continue;
       const idx = Number(m[1]);

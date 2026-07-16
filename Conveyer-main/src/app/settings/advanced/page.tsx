@@ -241,6 +241,22 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: "Real Factual Images (NASA / Wikimedia)",
+    subtitle: "Sources verified real-world photographs of scientists, planets, space missions, and historical discoveries from public archives (No API keys needed!).",
+    fields: [
+      {
+        key: "REAL_IMAGE_RATIO_PERCENT",
+        desc: "Percentage of scenes to source from verified real scientific and historical archives (NASA & Wikimedia Commons). 0 = disabled (AI generated). 30 = up to 30% of scenes use authentic photographs.",
+        examples: "0–100  ·  default 0",
+      },
+      {
+        key: "REAL_IMAGE_PROVIDER",
+        desc: "Which archive to search when sourcing real photographs. `all` searches both NASA Open Image Library and Wikimedia Commons. Both are 100% free with no API keys required.",
+        examples: "all  /  nasa  /  wikimedia  /  off",
+      },
+    ],
+  },
+  {
     title: "Video Assembly (FFmpeg)",
     subtitle: "Final stitching step. Controls output resolution, framerate, and how scenes transition into each other.",
     fields: [

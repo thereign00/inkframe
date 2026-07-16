@@ -13,7 +13,7 @@ interface LogEntry {
 interface Run {
   id: string;
   title: string | null;
-  status: "pending" | "running" | "done" | "error" | "cancelled";
+  status: "pending" | "running" | "paused" | "done" | "error" | "cancelled";
   output_path: string | null;
 }
 interface SceneAsset {
@@ -125,6 +125,14 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
     await fetch(`/api/runs/${id}/cancel`, { method: "POST" });
   }
 
+  async function pause() {
+    await fetch(`/api/runs/${id}/pause`, { method: "POST" });
+  }
+
+  async function resume() {
+    await fetch(`/api/runs/${id}/resume`, { method: "POST" });
+  }
+
   async function openFolder() {
     try {
       const r = await fetch(`/api/runs/${id}/open-folder`, { method: "POST" });
@@ -148,14 +156,52 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
           <div style={{ color: "#8a8aa0", fontSize: 12 }}>{id}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {(run?.status === "running" || run?.status === "pending") && (
-            <button className="btn-secondary" onClick={cancel} style={{ color: "#ff8888", borderColor: "#3a1d1d" }}>
-              ⏹ Stop
+          {run?.status === "paused" && (
+            <button className="btn" onClick={resume} style={{ background: "#22c55e", color: "#fff", fontWeight: 700 }}>
+              ▶ Resume Pipeline
             </button>
+          )}
+          {(run?.status === "running" || run?.status === "pending") && (
+            <>
+              <button className="btn-secondary" onClick={pause} style={{ color: "#eab308", borderColor: "#4d3e14" }}>
+                ⏸ Pause
+              </button>
+              <button className="btn-secondary" onClick={cancel} style={{ color: "#ff8888", borderColor: "#3a1d1d" }}>
+                ⏹ Stop
+              </button>
+            </>
           )}
           {run && <span className={`tag tag-${run.status}`}>{run.status}</span>}
         </div>
       </div>
+
+      {run?.status === "paused" && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 16,
+            background: "rgba(234, 179, 8, 0.1)",
+            border: "1px solid rgba(234, 179, 8, 0.3)",
+            padding: 14,
+            borderRadius: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between"
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, color: "#facc15", marginBottom: 4 }}>
+              ⏸️ Pipeline Paused
+            </div>
+            <div style={{ fontSize: 13, color: "#fef08a" }}>
+              The run is paused (e.g. due to temporary network loss, rate limits, or API credit issues). Check your internet connection or fund credits in Settings, then click Resume.
+            </div>
+          </div>
+          <button className="btn" onClick={resume} style={{ background: "#22c55e", color: "#fff", flexShrink: 0, marginLeft: 12 }}>
+            ▶ Resume
+          </button>
+        </div>
+      )}
 
       {assets?.finalExists && (
         <div className="card" style={{ marginBottom: 12 }}>

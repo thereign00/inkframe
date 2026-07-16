@@ -10,12 +10,14 @@ import { synthesizeScene, type TtsResult } from "./services/tts";
 import { generateImage, type ImageResult } from "./services/image-gen";
 import { animateScene, pickScenesToAnimate } from "./services/img2vid";
 import { pickScenesForStock, fetchStockVideo, clearUsedStockIds } from "./services/stock-video";
+import { pickScenesForRealImages, fetchRealImage, clearUsedRealImages } from "./services/real-image";
 import { assembleVideo, type AssembleInput } from "./services/video-assemble";
 import { getKeyCount, getKeyList, setBatchKey, withSceneKey } from "./services/labs69";
 import { syncRunToDrive } from "./services/run-upload";
 import { downloadReusedClip } from "./services/reuse";
 import { syncActiveChannelToLive } from "./channels";
-import { checkCancelled, clearCancelled, CancelledError } from "./cancellation";
+import { checkCancelled, clearCancelled, CancelledError, checkPausedOrCancelled, pauseRun } from "./cancellation";
+import { directorRepairVisualPrompt } from "./services/director-repair";
 
 const updateRun = db.prepare(
   "UPDATE runs SET status = ?, output_path = ?, updated_at = datetime('now') WHERE id = ?"
@@ -31,28 +33,54 @@ async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  let attempt = 1;
+  while (true) {
     try {
-      checkCancelled(runId);
+      await checkPausedOrCancelled(runId);
       return await fn();
     } catch (e) {
       if (e instanceof CancelledError) throw e;
       const msg = e instanceof Error ? e.message : String(e);
-      if (attempt < MAX_RETRIES) {
-        const delay = INITIAL_RETRY_MS * Math.pow(2, attempt - 1); // 3s, 6s, 12s, 24s
+
+      // 1. Network disconnection auto-wait loop
+      const isNetworkErr = /fetch failed|ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EHOSTUNREACH/i.test(msg);
+      if (isNetworkErr) {
         log(
           runId, "warn",
-          `${label} failed (attempt ${attempt}/${MAX_RETRIES}), retrying in ${(delay / 1000).toFixed(0)}s: ${msg.slice(0, 200)}`,
+          `🌐 ${label} encountered network error (${msg.slice(0, 120)}). Auto-waiting 15s for internet connection...`,
           { stage: "pipeline" }
         );
-        await new Promise(r => setTimeout(r, delay));
-        checkCancelled(runId);
+        await new Promise((r) => setTimeout(r, 15_000));
+        await checkPausedOrCancelled(runId);
+        continue;
+      }
+
+      // 2. Concurrency / Rate limit (single API key backoff)
+      const isConcurrencyOrRateLimit = /Concurrent image|limit reached|403|429|Too Many Requests/i.test(msg);
+      const maxAttempts = isConcurrencyOrRateLimit ? 25 : MAX_RETRIES;
+
+      if (attempt < maxAttempts) {
+        const delay = isConcurrencyOrRateLimit
+          ? 12_000
+          : INITIAL_RETRY_MS * Math.pow(2, attempt - 1);
+        log(
+          runId, "warn",
+          `${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${(delay / 1000).toFixed(0)}s: ${msg.slice(0, 200)}`,
+          { stage: "pipeline" }
+        );
+        await new Promise((r) => setTimeout(r, delay));
+        attempt++;
+        await checkPausedOrCancelled(runId);
       } else {
-        throw new Error(`${label} failed after ${MAX_RETRIES} attempts: ${msg.slice(0, 300)}`);
+        // Instead of crashing the pipeline, pause and wait for user to fund credits or fix settings and click Resume!
+        await pauseRun(
+          runId,
+          `${label} failed after ${attempt} attempts: ${msg.slice(0, 180)}. Please check API credits or network, then click Resume.`
+        );
+        attempt = 1; // Reset attempt counter upon Resume
       }
     }
   }
-  throw new Error("unreachable");
 }
 
 // ── Scene result type ───────────────────────────────────────────────────────
@@ -77,6 +105,7 @@ export async function runPipeline(runId: string, script: string) {
   try {
     clearCancelled(runId);
     clearUsedStockIds();
+    clearUsedRealImages();
     updateRun.run("running", null, runId);
 
     // Force-sync the active channel's saved settings into the live table
@@ -128,8 +157,11 @@ export async function runPipeline(runId: string, script: string) {
         ? pickScenesToAnimate(scenes, animRatio, animDistribution)
         : new Set<number>();
 
+    const realImageRatio = Number(getSetting("REAL_IMAGE_RATIO_PERCENT") || "0");
+    const realImageTargets = await pickScenesForRealImages(runId, scenes, realImageRatio);
+
     const stockRatio = Number(getSetting("STOCK_FOOTAGE_RATIO_PERCENT") || "0");
-    const stockTargets = pickScenesForStock(scenes, stockRatio);
+    const stockTargets = pickScenesForStock(scenes, stockRatio, realImageTargets);
 
     const totalBatches = Math.ceil(scenes.length / BATCH_SIZE);
 
@@ -137,7 +169,7 @@ export async function runPipeline(runId: string, script: string) {
       runId, "info",
       `Processing ${scenes.length} scenes in ${totalBatches} batch${totalBatches > 1 ? "es" : ""} of ${BATCH_SIZE}. ` +
       `Concurrency: TTS=${ttsConcurrency}, Image=${imageConcurrency}, Anim=${animConcurrency}. ` +
-      `Animation: ${animTargets.size}/${scenes.length} scenes, Stock: ${stockTargets.size}/${scenes.length} scenes. Retries: ${MAX_RETRIES}/task.`,
+      `Animation: ${animTargets.size}/${scenes.length} scenes, Stock: ${stockTargets.size}/${scenes.length} scenes, Real Images: ${realImageTargets.size}/${scenes.length} scenes. Retries: ${MAX_RETRIES}/task.`,
       { stage: "pipeline" }
     );
 
@@ -193,7 +225,7 @@ export async function runPipeline(runId: string, script: string) {
           runId, scene,
           { audioDir, imgDir, animDir },
           { limitTts, limitImg, limitAnim },
-          { animTargets, stockTargets, reuseMap },
+          { animTargets, stockTargets, realImageTargets, reuseMap },
         );
 
         return sceneKey
@@ -380,6 +412,7 @@ async function processScene(
   opts: {
     animTargets: Set<number>;
     stockTargets: Set<number>;
+    realImageTargets?: Set<number>;
     reuseMap: Record<string, string>;
   },
 ): Promise<SceneResult> {
@@ -387,9 +420,10 @@ async function processScene(
   // For stock target scenes, we attempt to source a real stock video first.
   // This avoids wasting image generation credits if a valid stock clip is found!
   const isStockTarget = opts.stockTargets && opts.stockTargets.has(scene.index);
+  const isRealImageTarget = opts.realImageTargets && opts.realImageTargets.has(scene.index);
 
   let audio: TtsResult;
-  let image: { filePath: string; providerJobId?: string; provider?: string } | null = null;
+  let image: { filePath: string; providerJobId?: string; provider?: string; realImageTag?: string; motionType?: "zoom-in" | "zoom-out" | "slide-up" | "slide-down" | "slide-left" | "slide-right" } | null = null;
   let videoPath: string | null = null;
   const reuseFileId = opts.reuseMap[String(scene.index)];
 
@@ -433,9 +467,15 @@ async function processScene(
       checkCancelled(runId);
       log(runId, "info", `Scene #${scene.index} stock footage unavailable, generating fallback AI image...`, { stage: "animate" });
       image = await limits.limitImg(() =>
-        withRetry(runId, `Image #${scene.index}`, () =>
-          generateImage(runId, scene, dirs.imgDir)
-        )
+        withRetry(runId, `Image #${scene.index}`, async () => {
+          try {
+            return await generateImage(runId, scene, dirs.imgDir);
+          } catch (err) {
+            if (err instanceof CancelledError) throw err;
+            const repairedPrompt = await directorRepairVisualPrompt(runId, scene.index, scene.visual_prompt, (err as Error).message, scene.text);
+            return await generateImage(runId, { ...scene, visual_prompt: repairedPrompt }, dirs.imgDir);
+          }
+        })
       );
     } else {
       image = { filePath: "" };
@@ -447,11 +487,31 @@ async function processScene(
           synthesizeScene(runId, scene, dirs.audioDir)
         )
       ),
-      limits.limitImg(() =>
-        withRetry(runId, `Image #${scene.index}`, () =>
-          generateImage(runId, scene, dirs.imgDir)
-        )
-      ),
+      limits.limitImg(async () => {
+        if (isRealImageTarget) {
+          const outPath = path.join(dirs.imgDir, `scene_${String(scene.index).padStart(3, "0")}.jpg`);
+          const realImgRes = await fetchRealImage(runId, scene, outPath);
+          if (realImgRes) {
+            const realImageTag = `REAL IMAGE: ${realImgRes.title.slice(0, 50)} (${realImgRes.source})`;
+            log(
+              runId,
+              "info",
+              `📷 [REAL IMAGE] Scene #${scene.index}: "${realImgRes.title}" (${realImgRes.source})`,
+              { stage: "real-image" }
+            );
+            return { filePath: realImgRes.filePath, provider: "NASA/Wikimedia", realImageTag, motionType: realImgRes.motionType };
+          }
+        }
+        return await withRetry(runId, `Image #${scene.index}`, async () => {
+          try {
+            return await generateImage(runId, scene, dirs.imgDir);
+          } catch (err) {
+            if (err instanceof CancelledError) throw err;
+            const repairedPrompt = await directorRepairVisualPrompt(runId, scene.index, scene.visual_prompt, (err as Error).message, scene.text);
+            return await generateImage(runId, { ...scene, visual_prompt: repairedPrompt }, dirs.imgDir);
+          }
+        });
+      }),
     ]);
     audio = audioRes;
     image = imageRes;
@@ -466,7 +526,10 @@ async function processScene(
     }
   }
 
-  if (!videoPath && opts.animTargets.has(scene.index) && image && image.filePath) {
+  // CRITICAL: If image provider is "NASA/Wikimedia", do NOT animate it with Veo/Runway!
+  // This ensures the pipeline does not remove/replace our real photograph with synthetic AI footage.
+  // Instead, the real photograph is preserved with Ken-Burns pan/zoom and displays the "REAL IMAGE" badge.
+  if (!videoPath && opts.animTargets.has(scene.index) && image && image.filePath && image.provider !== "NASA/Wikimedia") {
     checkCancelled(runId);
     try {
       videoPath = await limits.limitAnim(() =>
@@ -492,5 +555,7 @@ async function processScene(
     audio,
     _imgProviderJobId: image?.providerJobId,
     _imgProvider: image?.provider,
+    realImageTag: image?.realImageTag,
+    motionType: image?.motionType,
   };
 }

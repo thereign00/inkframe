@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getSetting } from "../settings";
+import { getSetting, getRunDirectorNotes } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
 import { checkCancelled, CancelledError } from "../cancellation";
@@ -39,7 +39,10 @@ export async function generateImage(
   const fallback = (getSetting("IMAGE_FALLBACK_PROVIDER") || "").toLowerCase().trim();
   const styleSuffix = getPrompt("image_prompt");
   const basePrompt = options.promptOverride || scene.visual_prompt;
-  const finalPrompt = `${basePrompt}, ${styleSuffix}`;
+  const runNotes = getRunDirectorNotes(runId);
+  const finalPrompt = runNotes
+    ? `${basePrompt}, ${styleSuffix}, [Director Style Instructions: ${runNotes}]`
+    : `${basePrompt}, ${styleSuffix}`;
   const fileName = options.partNum
     ? `scene_${String(scene.index).padStart(3, "0")}_part${options.partNum}.png`
     : `scene_${String(scene.index).padStart(3, "0")}.png`;

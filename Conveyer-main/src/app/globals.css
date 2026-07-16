@@ -52,8 +52,9 @@ html, body {
   display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
   font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
 }
-.tag-pending  { background: #2a2a3a; color: #b8b8c8; }
-.tag-running  { background: #4b3300; color: #ffce4d; }
-.tag-done     { background: #1d3a1d; color: #6dd66d; }
-.tag-error    { background: #3a1d1d; color: #ff6d6d; }
+.tag-pending   { background: #2a2a3a; color: #b8b8c8; }
+.tag-running   { background: #4b3300; color: #ffce4d; }
+.tag-paused    { background: #4d3e14; color: #facc15; }
+.tag-done      { background: #1d3a1d; color: #6dd66d; }
+.tag-error     { background: #3a1d1d; color: #ff6d6d; }
 .tag-cancelled { background: #2a2a3a; color: #8a8aa0; }

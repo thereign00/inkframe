@@ -32,6 +32,7 @@ interface ChannelSummary {
 export default function NewRunPage() {
   const [title, setTitle] = useState("");
   const [script, setScript] = useState("");
+  const [directorNotes, setDirectorNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [stats, setStats] = useState<StatsResp | null>(null);
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
@@ -135,7 +136,7 @@ export default function NewRunPage() {
       const r = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, script }),
+        body: JSON.stringify({ title, script, directorNotes }),
       });
       if (!r.ok) {
         await appAlert(`Error: ${await r.text()}`);
@@ -219,6 +220,20 @@ export default function NewRunPage() {
             <span><strong style={{ color: "#e8e8f0" }}>{scriptStats.chars}</strong> chars</span>
             <span>≈ <strong style={{ color: "#7c5cff" }}>{scriptStats.duration}</strong> of final video</span>
             <span>≈ <strong style={{ color: "#e8e8f0" }}>{scriptStats.scenes}</strong> scenes</span>
+          </div>
+        </div>
+        <div>
+          <label className="label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            🎬 Director Notes / Visual Guidance (optional)
+          </label>
+          <input
+            className="input"
+            value={directorNotes}
+            onChange={(e) => setDirectorNotes(e.target.value)}
+            placeholder="e.g. Focus on realistic NASA space photography, dark moody cinematic lighting, avoid cartoon styles..."
+          />
+          <div style={{ color: "#6a6a80", fontSize: 12, marginTop: 4 }}>
+            Explains your visual preferences to the AI Director for scene splitting, real photo selection, and AI visual generation.
           </div>
         </div>
         <div>

@@ -19,8 +19,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   ensureInit();
-  const body = (await req.json()) as { title?: string; script?: string };
+  const body = (await req.json()) as { title?: string; script?: string; directorNotes?: string };
   const script = (body.script ?? "").trim();
+  const directorNotes = (body.directorNotes ?? "").trim();
   if (!script) {
     return NextResponse.json({ error: "script is empty" }, { status: 400 });
   }
@@ -29,9 +30,9 @@ export async function POST(req: Request) {
   const baseFolderName = sanitizeFolderName(body.title ?? "", id.slice(0, 8));
   const folderName = pickAvailableFolderName(baseFolderName);
 
-  insertRun.run(id, body.title ?? null, folderName, script, JSON.stringify({}));
+  insertRun.run(id, body.title ?? null, folderName, script, JSON.stringify({ directorNotes }));
 
-  // Запускаємо пайплайн у фоні. На локалі цього досить.
+  // Run pipeline in background
   runPipeline(id, script).catch((e) => {
     // eslint-disable-next-line no-console
     console.error("pipeline crash", e);

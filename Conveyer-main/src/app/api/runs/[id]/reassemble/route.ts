@@ -5,13 +5,8 @@ import db from "@/lib/db";
 import { ensureInit } from "@/lib/init";
 import { log } from "@/lib/logger";
 import { assembleVideo, type AssembleInput } from "@/lib/services/video-assemble";
-import { synthesizeScene } from "@/lib/services/tts";
-import { generateImage, type ImageResult } from "@/lib/services/image-gen";
-import { animateScene, pickScenesToAnimate } from "@/lib/services/img2vid";
 import { splitScript, type Scene } from "@/lib/services/scene-split";
 import { getRunDir } from "@/lib/run-paths";
-import { pLimit } from "@/lib/plimit";
-import { getSetting } from "@/lib/settings";
 
 const getRun = db.prepare("SELECT id, script FROM runs WHERE id = ?");
 const updateRun = db.prepare(
@@ -19,11 +14,11 @@ const updateRun = db.prepare(
 );
 
 /**
- * Smart reassemble:
- *  1. Load scenes.json if it exists. Otherwise re-split the script.
- *  2. For scenes missing an image or audio file, regenerate just that asset.
- *  3. For scenes missing a video (if animations were enabled), generate it.
- *  4. Re-run final assembly with the complete set (images + videos + audio).
+ * Reassemble video from existing pipeline assets without generating anything afresh.
+ *  1. Load scenes.json (or split script if missing).
+ *  2. For each scene, find any existing audio (.mp3), image (.png/.jpg/.jpeg), or video (.mp4).
+ *  3. Preserve real image badges & motion metadata if the scene has a factual real photograph.
+ *  4. Run final assembly with the existing assets immediately.
  */
 export async function POST(_: Request, ctx: { params: Promise<{ id: string }> }) {
   ensureInit();
@@ -43,7 +38,7 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
   (async () => {
     try {
       updateRun.run("running", null, id);
-      log(id, "info", "Smart reassemble: checking assets", { stage: "pipeline" });
+      log(id, "info", "Reassembling existing pipeline assets (no new generation)...", { stage: "pipeline" });
 
       // ── 1. Get scenes ─────────────────────────────────────────────────
       let scenes: Scene[];
@@ -57,133 +52,104 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
         fs.writeFileSync(scenesFile, JSON.stringify(scenes, null, 2), "utf-8");
       }
 
-      // ── Helper paths ──────────────────────────────────────────────────
+      // ── Helper searchers ──────────────────────────────────────────────
       function audioPath(idx: number) {
         return path.join(audioDir, `scene_${String(idx).padStart(3, "0")}.mp3`);
-      }
-      function imgPath(idx: number) {
-        return path.join(imgDir, `scene_${String(idx).padStart(3, "0")}.png`);
-      }
-      function vidPath(idx: number) {
-        return path.join(animDir, `scene_${String(idx).padStart(3, "0")}.mp4`);
       }
       function fileExists(p: string) {
         return fs.existsSync(p) && fs.statSync(p).size > 1024;
       }
-
-      // ── 2. Fill missing images & audio ────────────────────────────────
-      const missingAudio = scenes.filter((s) => !fileExists(audioPath(s.index)));
-      const missingImage = scenes.filter((s) => !fileExists(imgPath(s.index)));
-
-      if (missingAudio.length || missingImage.length) {
-        log(
-          id, "info",
-          `Filling gaps: ${missingImage.length} images, ${missingAudio.length} audio files`,
-          { stage: "pipeline" }
-        );
-        const limitImg = pLimit(Math.max(1, Number(getSetting("IMAGE_CONCURRENCY") || "5")));
-        const limitTts = pLimit(Math.max(1, Number(getSetting("TTS_CONCURRENCY") || "3")));
-
-        await Promise.all([
-          ...missingAudio.map((s) =>
-            limitTts(() =>
-              synthesizeScene(id, s, audioDir).catch((e) => {
-                log(id, "warn", `Failed to regenerate audio #${s.index}: ${(e as Error).message}`, {
-                  stage: "tts",
-                });
-              })
-            )
-          ),
-          ...missingImage.map((s) =>
-            limitImg(() =>
-              generateImage(id, s, imgDir).catch((e) => {
-                log(id, "warn", `Failed to regenerate image #${s.index}: ${(e as Error).message}`, {
-                  stage: "image",
-                });
-              })
-            )
-          ),
-        ]);
-      }
-
-      // ── 3. Fill missing animations (if enabled in settings) ───────────
-      const animProvider = (getSetting("ANIMATION_PROVIDER") || "off").toLowerCase();
-      if (animProvider !== "off") {
-        const animRatio = Number(getSetting("ANIMATION_RATIO_PERCENT") || "50");
-        const animDistRaw = (getSetting("ANIMATION_DISTRIBUTION") || "first-half").toLowerCase();
-        const animDistribution =
-          animDistRaw === "alternating" || animDistRaw === "random" || animDistRaw === "all"
-            ? (animDistRaw as "alternating" | "random" | "all")
-            : "first-half";
-
-        // Determine which scenes SHOULD have animations
-        const animTargets = pickScenesToAnimate(scenes, animRatio, animDistribution);
-
-        // Find scenes that should have animations but don't
-        const missingVideo = scenes.filter(
-          (s) => animTargets.has(s.index) && !fileExists(vidPath(s.index)) && fileExists(imgPath(s.index))
-        );
-
-        if (missingVideo.length > 0) {
-          log(
-            id, "info",
-            `Filling ${missingVideo.length} missing animations (${animTargets.size} total targets, provider: ${animProvider})`,
-            { stage: "animate" }
-          );
-          const limitAnim = pLimit(Math.max(1, Number(getSetting("ANIMATION_CONCURRENCY") || "3")));
-
-          await Promise.all(
-            missingVideo.map((s) =>
-              limitAnim(() =>
-                animateScene(id, s, imgPath(s.index), animDir, {
-                  audioPath: fs.existsSync(audioPath(s.index)) ? audioPath(s.index) : undefined,
-                }).catch((e) => {
-                  log(id, "warn",
-                    `Failed to generate animation #${s.index}: ${(e as Error).message.slice(0, 200)}`,
-                    { stage: "animate" }
-                  );
-                })
-              )
-            )
-          );
-        } else if (animTargets.size > 0) {
-          log(id, "info", `All ${animTargets.size} animation targets already have videos`, { stage: "animate" });
+      function findExistingImagePath(idx: number): string | null {
+        const pad = String(idx).padStart(3, "0");
+        const candidates = [
+          path.join(imgDir, `scene_${pad}_clean.jpg`),
+          path.join(imgDir, `scene_${pad}.jpg`),
+          path.join(imgDir, `scene_${pad}.jpeg`),
+          path.join(imgDir, `scene_${pad}.png`),
+        ];
+        for (const c of candidates) {
+          if (fileExists(c)) return c;
         }
+        return null;
+      }
+      function findExistingVideoPath(idx: number): string | null {
+        const pad = String(idx).padStart(3, "0");
+        const candidates = [
+          path.join(animDir, `scene_${pad}.mp4`),
+          path.join(animDir, `stock_scene_${pad}.mp4`),
+        ];
+        for (const c of candidates) {
+          if (fileExists(c)) return c;
+        }
+        return null;
+      }
+      function getExistingRealImageMetadata(idx: number, imgPath: string): { realImageTag?: string; motionType?: "zoom-in" | "zoom-out" | "slide-up" | "slide-down" | "slide-left" | "slide-right" } {
+        const pad = String(idx).padStart(3, "0");
+        const metaPath = path.join(imgDir, `scene_${pad}.real.json`);
+        if (fs.existsSync(metaPath)) {
+          try {
+            const data = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+            return { realImageTag: data.realImageTag, motionType: data.motionType };
+          } catch {}
+        }
+        const lower = imgPath.toLowerCase();
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+          try {
+            const logRow = db.prepare("SELECT message FROM run_logs WHERE run_id = ? AND stage = 'real-image' AND message LIKE ? ORDER BY id DESC LIMIT 1")
+              .get(id, `%Scene #${idx}:%`) as { message: string } | undefined;
+            if (logRow?.message) {
+              const titleMatch = /["“]([^"”]+)["”]\s*\(([^)]+)\)/.exec(logRow.message) || /["“]([^"”]+)["”]/.exec(logRow.message);
+              if (titleMatch) {
+                const title = titleMatch[1];
+                const source = titleMatch[2] || "NASA/Wikimedia";
+                const motionMatch = /\((zoom-in|zoom-out|slide-up|slide-down|slide-left|slide-right)\)/.exec(logRow.message);
+                return {
+                  realImageTag: `REAL IMAGE: ${title.slice(0, 50)} (${source})`,
+                  motionType: (motionMatch?.[1] as any) || "zoom-in",
+                };
+              }
+            }
+          } catch {}
+        }
+        return {};
       }
 
-      // ── 4. Assemble — include all available assets ────────────────────
+      // ── 2. Assemble — strictly use all available existing assets ──────
       const inputs: AssembleInput[] = [];
       let videoCount = 0;
+      let realImgCount = 0;
+
       for (const s of scenes) {
         const ap = audioPath(s.index);
-        const ip = imgPath(s.index);
-        if (!fs.existsSync(ap) || !fs.existsSync(ip)) {
-          log(id, "warn", `Scene #${s.index} still incomplete — skipping`, { stage: "assemble" });
+        const ip = findExistingImagePath(s.index);
+        const vp = findExistingVideoPath(s.index);
+
+        if (!fileExists(ap) || (!ip && !vp)) {
+          log(id, "warn", `Scene #${s.index} missing audio or image/video on disk — skipping from assembly`, { stage: "assemble" });
           continue;
         }
         const stat = fs.statSync(ap);
+        if (vp) videoCount++;
 
-        // Include animation video if available
-        const vp = vidPath(s.index);
-        const hasVideo = fileExists(vp);
-        if (hasVideo) videoCount++;
+        const { realImageTag, motionType } = ip ? getExistingRealImageMetadata(s.index, ip) : {};
+        if (realImageTag) realImgCount++;
 
         inputs.push({
           scene: s,
-          imagePath: ip,
-          videoPath: hasVideo ? vp : null,
+          imagePath: ip || "",
+          videoPath: vp || null,
           audio: { filePath: ap, durationSec: Math.max(1, stat.size / 16000) },
+          realImageTag,
+          motionType,
         });
       }
 
-      if (videoCount > 0) {
-        log(id, "info", `Including ${videoCount}/${inputs.length} animation videos in assembly`, { stage: "assemble" });
-      }
-      if (inputs.length === 0) throw new Error("No complete scenes found");
+      log(id, "info", `Assembling ${inputs.length}/${scenes.length} existing scenes (${videoCount} animation videos, ${realImgCount} real images)...`, { stage: "assemble" });
+      if (inputs.length === 0) throw new Error("No complete scenes found on disk");
 
       const finalPath = await assembleVideo(id, inputs, runDir);
       updateRun.run("done", finalPath, id);
-      log(id, "success", `Reassemble complete (${inputs.length}/${scenes.length} scenes, ${videoCount} videos)`, {
+      log(id, "success", `Reassemble complete (${inputs.length}/${scenes.length} scenes assembled, ${videoCount} videos, ${realImgCount} real photos)`, {
         stage: "pipeline",
         data: { finalPath },
       });
@@ -196,3 +162,4 @@ export async function POST(_: Request, ctx: { params: Promise<{ id: string }> })
 
   return NextResponse.json({ ok: true });
 }
+

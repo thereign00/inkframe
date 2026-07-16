@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
-import { getSetting } from "../settings";
+import { getSetting, getRunDirectorNotes } from "../settings";
 import { getPrompt } from "../prompts";
 import { log } from "../logger";
 import { getRunDir } from "../run-paths";
@@ -39,6 +39,18 @@ const WORDS_PER_CHUNK = 3000;
 export async function splitScript(runId: string, script: string): Promise<Scene[]> {
   const provider = (getSetting("SCENE_SPLIT_PROVIDER") || "google").toLowerCase();
   let systemPrompt = getPrompt("scene_split");
+
+  const customDirectorPrompt = getSetting("DIRECTOR_PROMPT");
+  if (customDirectorPrompt && customDirectorPrompt.trim()) {
+    log(runId, "info", `🎬 Active Channel Director Mode Instructions: "${customDirectorPrompt.trim().slice(0, 100)}..."`, { stage: "scene_split" });
+    systemPrompt = `${systemPrompt}\n\n=== CHANNEL DIRECTOR INSTRUCTIONS & FULL PIPELINE GUIDANCE ===\nThe Channel Director has provided the following creative rules, pacing guidance, and error-prevention guidelines. You are the Autonomous Director in charge of planning the scenes and solutions according to these instructions:\n\n${customDirectorPrompt.trim()}\n\nYou MUST strictly follow these Director Instructions when planning scene visuals, search keywords, tone, and pacing.`;
+  }
+
+  const runNotes = getRunDirectorNotes(runId);
+  if (runNotes) {
+    log(runId, "info", `🎬 Video-Specific Director Notes: "${runNotes.slice(0, 100)}..."`, { stage: "scene_split" });
+    systemPrompt = `${systemPrompt}\n\n=== THIS VIDEO'S DIRECTOR & VISUAL GUIDANCE ===\nThe user has provided specific guidance for what kind of images, style, or focus they want in THIS video:\n"${runNotes}"\n\nYou MUST strictly follow these notes when writing visual_prompt and search_keywords!`;
+  }
 
   if (getSetting("DIRECTOR_MODE") === "1") {
     log(runId, "info", "🎬 Director Mode enabled — reading script and analyzing topic, visual themes, and cinematography...", { stage: "scene_split" });
@@ -120,6 +132,31 @@ export async function splitScript(runId: string, script: string): Promise<Scene[
         delete s.overlay_text;
       } else {
         lastOverlayIndex = i;
+      }
+    }
+  }
+
+  // ── Dynamic Intro Hook & Title Card Enforcer (First X% of Video) ─────────
+  const introHookPercent = Number(getSetting("INTRO_HOOK_PERCENT") ?? 10);
+  if (introHookPercent > 0 && allScenes.length > 0) {
+    const hookCount = Math.max(1, Math.round((allScenes.length * introHookPercent) / 100));
+    log(
+      runId,
+      "info",
+      `🚀 Applying Dynamic Intro Hook & Title Cards to first ${hookCount} scene(s) (${introHookPercent}% of video)`,
+      { stage: "scene_split" }
+    );
+    // Ensure Opening Title Card on Scene #0 if missing
+    if (!allScenes[0].overlay_text && allScenes[0].text) {
+      const firstWords = allScenes[0].text
+        .replace(/[^a-zA-Z0-9\s]/g, "")
+        .trim()
+        .split(/\s+/)
+        .slice(0, 4)
+        .join(" ")
+        .toUpperCase();
+      if (firstWords) {
+        allScenes[0].overlay_text = firstWords;
       }
     }
   }
@@ -335,20 +372,70 @@ async function splitWithClaude(systemPrompt: string, script: string): Promise<st
     .join("\n");
 }
 
-/** Extracts the first JSON array from a text response, even if the model added markdown. */
+/** Extracts the first JSON array from a text response, even if the model added markdown or cut off the closing bracket. */
 function extractJson(text: string): unknown {
   const trimmed = text.trim();
   try {
     return JSON.parse(trimmed);
-  } catch {
-    const match = trimmed.match(/\[[\s\S]*\]/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]);
-      } catch {}
-    }
-    throw new Error("Could not parse JSON from model response");
+  } catch {}
+
+  const match = trimmed.match(/\[[\s\S]*\]/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]);
+    } catch {}
   }
+
+  // Self-healing recovery for truncated JSON (e.g. missing closing bracket/brace from token cutoff)
+  const startIdx = trimmed.indexOf("[");
+  if (startIdx !== -1) {
+    let candidate = trimmed.slice(startIdx).trim();
+    // Remove trailing comma or incomplete token at the very end
+    candidate = candidate.replace(/,\s*$/, "").replace(/,\s*([\}\]])$/, "$1");
+
+    let openBrackets = 0;
+    let openBraces = 0;
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < candidate.length; i++) {
+      const c = candidate[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === "\\") {
+        escape = true;
+        continue;
+      }
+      if (c === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (c === "[") openBrackets++;
+        else if (c === "]") openBrackets--;
+        else if (c === "{") openBraces++;
+        else if (c === "}") openBraces--;
+      }
+    }
+
+    if (inString) candidate += '"';
+    while (openBraces > 0) {
+      candidate += "}";
+      openBraces--;
+    }
+    while (openBrackets > 0) {
+      candidate += "]";
+      openBrackets--;
+    }
+
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+
+  throw new Error("Could not parse JSON from model response");
 }
 
 async function analyzeDirectorVision(runId: string, provider: string, script: string): Promise<string> {

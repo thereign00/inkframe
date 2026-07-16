@@ -1381,6 +1381,172 @@ export default function ChannelsPage() {
                     );
                   })()}
 
+                  {/* Real Factual Images (NASA & Wikimedia) */}
+                  {(() => {
+                    const realImgRatio = Number(editSettings.REAL_IMAGE_RATIO_PERCENT ?? 0);
+                    const realImgProvider = editSettings.REAL_IMAGE_PROVIDER || "all";
+                    const isOff = realImgRatio === 0 || realImgProvider === "off";
+
+                    return (
+                      <div
+                        style={{
+                          marginBottom: 20,
+                          padding: "12px 16px",
+                          background: "linear-gradient(135deg, #14141d, #1a1a28)",
+                          borderRadius: 10,
+                          border: "1px solid #2a2a3a",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: isOff ? 0 : 12 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#b8b8c8", whiteSpace: "nowrap" }}>
+                            🔭 Real Factual Images
+                          </span>
+
+                          {/* Provider buttons */}
+                          {([
+                            { value: "off", label: "Off" },
+                            { value: "all", label: "All (NASA + Wikimedia)" },
+                            { value: "nasa", label: "NASA Archives" },
+                            { value: "wikimedia", label: "Wikimedia Commons" },
+                          ] as const).map((opt) => {
+                            const isSelected = opt.value === "off" ? isOff : (!isOff && realImgProvider === opt.value);
+                            return (
+                              <button
+                                key={opt.value}
+                                onClick={() => {
+                                  if (opt.value === "off") {
+                                    updateChannelAnimation(ch, { REAL_IMAGE_RATIO_PERCENT: "0", REAL_IMAGE_PROVIDER: "off" });
+                                  } else {
+                                    const newRatio = realImgRatio === 0 ? "30" : String(realImgRatio);
+                                    updateChannelAnimation(ch, { REAL_IMAGE_RATIO_PERCENT: newRatio, REAL_IMAGE_PROVIDER: opt.value });
+                                  }
+                                }}
+                                disabled={busy}
+                                style={{
+                                  padding: "5px 14px",
+                                  borderRadius: 7,
+                                  border: isSelected ? "1.5px solid #7c5cff" : "1px solid #2a2a3a",
+                                  background: isSelected ? "linear-gradient(135deg, #2a1f5e, #3a2f7e)" : "transparent",
+                                  color: isSelected ? "#c8b8ff" : "#6a6a80",
+                                  fontWeight: isSelected ? 700 : 400,
+                                  fontSize: 12,
+                                  cursor: "pointer",
+                                  transition: "all 0.2s",
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Ratio slider */}
+                        {!isOff && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+                            <span style={{ fontSize: 11, color: "#6a6a80", whiteSpace: "nowrap" }}>Ratio</span>
+                            <input
+                              type="range"
+                              min="10"
+                              max="100"
+                              step="10"
+                              value={realImgRatio}
+                              onChange={(e) => setEditSettings((prev) => ({ ...prev, REAL_IMAGE_RATIO_PERCENT: e.target.value }))}
+                              onMouseUp={(e) => updateChannelAnimation(ch, { REAL_IMAGE_RATIO_PERCENT: (e.target as HTMLInputElement).value })}
+                              onTouchEnd={(e) => updateChannelAnimation(ch, { REAL_IMAGE_RATIO_PERCENT: (e.target as HTMLInputElement).value })}
+                              style={{
+                                flex: 1,
+                                accentColor: "#7c5cff",
+                                cursor: "pointer",
+                              }}
+                            />
+                            <span
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 700,
+                                color: "#c8b8ff",
+                                minWidth: 38,
+                                textAlign: "center",
+                                background: "#1a1a28",
+                                border: "1px solid #3a3a50",
+                                borderRadius: 6,
+                                padding: "2px 6px",
+                              }}
+                            >
+                              {realImgRatio}%
+                            </span>
+                          </div>
+                        )}
+
+                        <div style={{ fontSize: 11, color: "#5a5a70", marginTop: 8 }}>
+                          {isOff
+                            ? "Standard AI image generation"
+                            : `${realImgRatio}% of scenes attempt to source verified real photographs from ${realImgProvider === "all" ? "NASA & Wikimedia Commons" : realImgProvider}`}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Dynamic Intro Hook & Title Cards Percentage Bar */}
+                  {(() => {
+                    const hookPercent = Number(editSettings.INTRO_HOOK_PERCENT ?? 10);
+                    const isHookOff = hookPercent === 0;
+
+                    return (
+                      <div
+                        style={{
+                          marginBottom: 20,
+                          padding: "12px 16px",
+                          background: "linear-gradient(135deg, #14141d, #1a1a28)",
+                          borderRadius: 10,
+                          border: "1px solid #2a2a3a",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#b8b8c8" }}>
+                            🚀 Intro Hook & Title Card Coverage
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 700,
+                              color: "#c8b8ff",
+                              background: "#1a1a28",
+                              border: "1px solid #3a3a50",
+                              borderRadius: 6,
+                              padding: "2px 8px",
+                            }}
+                          >
+                            First {hookPercent}% of video
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 11, color: "#6a6a80", whiteSpace: "nowrap" }}>0%</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="40"
+                            step="5"
+                            value={hookPercent}
+                            onChange={(e) => setEditSettings((prev) => ({ ...prev, INTRO_HOOK_PERCENT: e.target.value }))}
+                            onMouseUp={(e) => updateChannelAnimation(ch, { INTRO_HOOK_PERCENT: (e.target as HTMLInputElement).value })}
+                            onTouchEnd={(e) => updateChannelAnimation(ch, { INTRO_HOOK_PERCENT: (e.target as HTMLInputElement).value })}
+                            style={{
+                              flex: 1,
+                              accentColor: "#7c5cff",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <span style={{ fontSize: 11, color: "#6a6a80", whiteSpace: "nowrap" }}>40%</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "#5a5a70", marginTop: 8 }}>
+                          {isHookOff
+                            ? "Dynamic Intro Hook & Title Card formatting disabled"
+                            : `First ${hookPercent}% of scenes receive dynamic intro pacing, title card overlays, and high-priority visual hook treatment.`}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* Keep video audio toggle */}
                   <div
                     style={{
@@ -1430,6 +1596,48 @@ export default function ChannelsPage() {
                         ? "Video's generated audio (ambient, SFX) mixed at 30% volume under TTS narration"
                         : "Only TTS narration is used — video audio is stripped"}
                     </span>
+                  </div>
+
+                  {/* 🎬 AI Director Mode & Custom Instructions Box */}
+                  <div
+                    style={{
+                      marginBottom: 24,
+                      padding: "16px 18px",
+                      background: "linear-gradient(135deg, rgba(124, 92, 255, 0.08), rgba(20, 20, 35, 0.9))",
+                      borderRadius: 12,
+                      border: "1px solid rgba(124, 92, 255, 0.35)",
+                      boxShadow: "0 4px 20px rgba(0, 0, 0, 0.25)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 15, fontWeight: 800, color: "#e8e8f0" }}>
+                          🎬 Autonomous AI Director — Channel Guidance & Error Prevention
+                        </span>
+                        <span style={{ background: "rgba(124, 92, 255, 0.25)", color: "#c8b8ff", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 999 }}>
+                          ACTIVE OVERSEER
+                        </span>
+                      </div>
+                    </div>
+                    <p style={{ fontSize: 12, color: "#a0a0b8", marginBottom: 12, lineHeight: 1.5 }}>
+                      Discuss and instruct the AI Director on how to plan videos for this channel. The Director reads these instructions alongside your script and prompts to coordinate scene pacing, visual aesthetics, stock keyword strategy, and autonomously repair prompt errors or rejections during the pipeline.
+                    </p>
+                    <textarea
+                      className="textarea"
+                      rows={4}
+                      placeholder="e.g. For space discovery videos, prioritize wide-angle cinematic views of planets and telescopes. Include real scientist names in search keywords for NASA/Wikimedia matching. If an image prompt is rejected, rewrite it to focus on authentic space atmosphere without speculative or sci-fi elements."
+                      value={editSettings.DIRECTOR_PROMPT || ""}
+                      onChange={(e) => setEditSettings((prev) => ({ ...prev, DIRECTOR_PROMPT: e.target.value }))}
+                      onBlur={(e) => updateChannelAnimation(ch, { DIRECTOR_PROMPT: e.target.value })}
+                      style={{
+                        background: "#0c0c14",
+                        border: "1px solid #3a3a5a",
+                        color: "#f0f0f8",
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                        fontFamily: "inherit",
+                      }}
+                    />
                   </div>
 
                   {/* Prompts header */}
