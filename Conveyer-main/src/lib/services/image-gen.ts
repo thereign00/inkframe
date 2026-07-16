@@ -6,7 +6,7 @@ import { log } from "../logger";
 import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createImageJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
-import { createKieImageTask, pollKieTask, downloadKieTask } from "./kieai";
+import { createKieImageTask, pollKieTask, downloadKieTask, getKieKeyList, tryNextKieKey, releaseKieTask } from "./kieai";
 import { comfyuiImage } from "./comfyui";
 
 export interface ImageResult {
@@ -48,7 +48,7 @@ export async function generateImage(
     : `scene_${String(scene.index).padStart(3, "0")}.png`;
   const filePath = path.join(outDir, fileName);
 
-  // Try primary provider first (with key failover for 69labs)
+  // Try primary provider first (with key failover for 69labs/kieai)
   try {
     const result = await generateWithKeyFailover(runId, provider, finalPrompt, filePath, scene.index);
     return result;
@@ -83,8 +83,8 @@ export async function generateImage(
 }
 
 /**
- * Wraps generateWithProvider with key-failover logic for 69labs.
- * If the provider is 69labs and there are multiple keys, tries each key
+ * Wraps generateWithProvider with key-failover logic for 69labs and KieAI.
+ * If the provider is 69labs/kieai and there are multiple keys, tries each key
  * in sequence until one works or all are exhausted.
  */
 async function generateWithKeyFailover(
@@ -94,42 +94,69 @@ async function generateWithKeyFailover(
   filePath: string,
   sceneIndex: number,
 ): Promise<ImageResult> {
-  if (provider !== "69labs" || getKeyList().length <= 1) {
-    return generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
-  }
+  if (provider === "69labs" && getKeyList().length > 1) {
+    const failedKeys = new Set<string>();
+    let lastErr: Error | undefined;
 
-  // Multi-key failover for 69labs
-  const failedKeys = new Set<string>();
-  let lastErr: Error | undefined;
+    while (true) {
+      try {
+        return await generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
+      } catch (err) {
+        if (err instanceof CancelledError) throw err;
+        lastErr = err instanceof Error ? err : new Error(String(err));
 
-  while (true) {
-    try {
-      return await generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
-    } catch (err) {
-      if (err instanceof CancelledError) throw err;
-      lastErr = err instanceof Error ? err : new Error(String(err));
+        const currentKey = getKeyList().find((k) => !failedKeys.has(k));
+        if (currentKey) failedKeys.add(currentKey);
 
-      // Track which key failed (current batch key)
-      const currentKey = getKeyList().find((k) => !failedKeys.has(k));
-      if (currentKey) failedKeys.add(currentKey);
+        const nextKey = tryNextKey(failedKeys);
+        if (!nextKey) {
+          log(runId, "warn",
+            `Image #${sceneIndex} exhausted all ${failedKeys.size} 69labs keys`,
+            { stage: "image" }
+          );
+          throw lastErr;
+        }
 
-      // Try next available key
-      const nextKey = tryNextKey(failedKeys);
-      if (!nextKey) {
-        // No more keys to try
-        log(runId, "warn",
-          `Image #${sceneIndex} exhausted all ${failedKeys.size} 69labs keys`,
+        log(runId, "info",
+          `Image #${sceneIndex} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
           { stage: "image" }
         );
-        throw lastErr;
       }
-
-      log(runId, "info",
-        `Image #${sceneIndex} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
-        { stage: "image" }
-      );
     }
   }
+
+  if (provider === "kieai" && getKieKeyList().length > 1) {
+    const failedKeys = new Set<string>();
+    let lastErr: Error | undefined;
+
+    while (true) {
+      try {
+        return await generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
+      } catch (err) {
+        if (err instanceof CancelledError) throw err;
+        lastErr = err instanceof Error ? err : new Error(String(err));
+
+        const currentKey = getKieKeyList().find((k) => !failedKeys.has(k));
+        if (currentKey) failedKeys.add(currentKey);
+
+        const nextKey = tryNextKieKey(failedKeys);
+        if (!nextKey) {
+          log(runId, "warn",
+            `Image #${sceneIndex} exhausted all ${failedKeys.size} KieAI keys`,
+            { stage: "image" }
+          );
+          throw lastErr;
+        }
+
+        log(runId, "info",
+          `Image #${sceneIndex} KieAI key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
+          { stage: "image" }
+        );
+      }
+    }
+  }
+
+  return generateWithProvider(runId, provider, prompt, filePath, sceneIndex);
 }
 
 /** Run image generation with a specific provider. */
@@ -270,6 +297,7 @@ async function kieaiImage(runId: string, prompt: string, outPath: string) {
 
   const MAX_ATTEMPTS = 3;
   let lastErr: unknown;
+  let lastTaskId: string | undefined;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
@@ -279,6 +307,7 @@ async function kieaiImage(runId: string, prompt: string, outPath: string) {
         aspectRatio,
         runId,
       });
+      lastTaskId = taskId;
       log(
         runId,
         "debug",
@@ -286,9 +315,10 @@ async function kieaiImage(runId: string, prompt: string, outPath: string) {
         { stage: "image" }
       );
       const data = await pollKieTask(taskId, runId, "image");
-      await downloadKieTask(data, outPath);
+      await downloadKieTask(data, outPath, taskId);
       return;
     } catch (e) {
+      if (lastTaskId) releaseKieTask(lastTaskId);
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
       if (attempt < MAX_ATTEMPTS) {

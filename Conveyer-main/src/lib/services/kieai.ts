@@ -17,17 +17,127 @@ const POLL_MAX_MS = 10 * 60 * 1000; // 10 min
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+import { AsyncLocalStorage } from "node:async_hooks";
 
-function getApiKey(): string {
-  const key = getSetting("KIEAI_API_KEY").trim();
-  if (!key) throw new Error("KIEAI_API_KEY is not set (Settings → Keys & Settings)");
-  return key;
+// ── Key pool & AsyncLocalStorage Context ─────────────────────────────────────
+
+const _kieKeyStorage = new AsyncLocalStorage<{ key: string }>();
+
+export function withSceneKieKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return _kieKeyStorage.run({ key }, fn);
 }
 
-function authHeaders(): Record<string, string> {
+export function setContextKieKey(key: string) {
+  const store = _kieKeyStorage.getStore();
+  if (store) store.key = key;
+}
+
+let _batchKieKey: string | null = null;
+export function setBatchKieKey(key: string | null) {
+  _batchKieKey = key;
+}
+
+const pool = {
+  active: new Map<string, number>(),
+
+  list(): string[] {
+    return getSetting("KIEAI_API_KEY")
+      .split(/[\n,;]+/)
+      .map((k) => k.trim())
+      .filter(Boolean);
+  },
+
+  pick(): string {
+    const keys = this.list();
+    if (keys.length === 0) throw new Error("KIEAI_API_KEY is not set (Settings → Keys & Settings)");
+
+    const store = _kieKeyStorage.getStore();
+    if (store?.key && keys.includes(store.key)) {
+      this.active.set(store.key, (this.active.get(store.key) ?? 0) + 1);
+      return store.key;
+    }
+
+    if (_batchKieKey && keys.includes(_batchKieKey)) {
+      this.active.set(_batchKieKey, (this.active.get(_batchKieKey) ?? 0) + 1);
+      return _batchKieKey;
+    }
+
+    let best = keys[0];
+    let bestCount = this.active.get(best) ?? 0;
+    for (let i = 1; i < keys.length; i++) {
+      const c = this.active.get(keys[i]) ?? 0;
+      if (c < bestCount) {
+        best = keys[i];
+        bestCount = c;
+      }
+    }
+    this.active.set(best, bestCount + 1);
+    return best;
+  },
+
+  acquireSpecific(key: string) {
+    if (!key) return;
+    this.active.set(key, (this.active.get(key) ?? 0) + 1);
+  },
+
+  release(key: string) {
+    const c = this.active.get(key) ?? 0;
+    if (c > 0) this.active.set(key, c - 1);
+  },
+
+  pickExcluding(exclude: Set<string>): string | null {
+    const keys = this.list().filter((k) => !exclude.has(k));
+    if (keys.length === 0) return null;
+
+    let best = keys[0];
+    let bestCount = this.active.get(best) ?? 0;
+    for (let i = 1; i < keys.length; i++) {
+      const c = this.active.get(keys[i]) ?? 0;
+      if (c < bestCount) {
+        best = keys[i];
+        bestCount = c;
+      }
+    }
+    this.active.set(best, bestCount + 1);
+    return best;
+  },
+};
+
+export function getKieKeyCount(): number {
+  return pool.list().length;
+}
+
+export function getKieKeyList(): string[] {
+  return pool.list();
+}
+
+export function tryNextKieKey(failedKeys: Set<string>): string | null {
+  const next = pool.pickExcluding(failedKeys);
+  if (next) {
+    setContextKieKey(next);
+    _batchKieKey = next;
+  }
+  return next;
+}
+
+const taskKeyMap = new Map<string, string>();
+
+export function releaseKieTask(taskId: string) {
+  const key = taskKeyMap.get(taskId);
+  if (key) {
+    pool.release(key);
+  }
+}
+
+export function forgetKieTask(taskId: string) {
+  const key = taskKeyMap.get(taskId);
+  if (key) pool.release(key);
+  taskKeyMap.delete(taskId);
+}
+
+function authHeadersFor(key: string): Record<string, string> {
   return {
-    Authorization: `Bearer ${getApiKey()}`,
+    Authorization: `Bearer ${key}`,
     "Content-Type": "application/json",
   };
 }
@@ -83,10 +193,12 @@ function extractTaskId(json: Record<string, unknown>, endpoint: string): string 
 async function postJsonRaw(
   path: string,
   body: unknown,
-  ctx?: { runId: string; stage: string }
-): Promise<Record<string, unknown>> {
+  ctx?: { runId: string; stage: string },
+  specificKey?: string
+): Promise<{ json: Record<string, unknown>; usedKey: string }> {
   const MAX_RETRIES = 10;
   let retry = 0;
+  const keyToUse = specificKey || pool.pick();
   while (true) {
     const bodyStr = JSON.stringify(body);
     // Log request payload for debugging
@@ -95,7 +207,7 @@ async function postJsonRaw(
     }
     const r = await fetchWithTimeout(`${BASE}${path}`, {
       method: "POST",
-      headers: authHeaders(),
+      headers: authHeadersFor(keyToUse),
       body: bodyStr,
     });
 
@@ -110,10 +222,11 @@ async function postJsonRaw(
       // Kie AI sometimes returns HTTP 200 but with an error code in the body
       const bodyCode = json.code as number | undefined;
       if (bodyCode && bodyCode >= 400) {
+        if (!specificKey) pool.release(keyToUse);
         const msg = (json.msg as string) || `error code ${bodyCode}`;
         throw new Error(`KieAI ${path}: ${msg}`);
       }
-      return json;
+      return { json, usedKey: keyToUse };
     }
 
     if (r.status === 429 && retry < MAX_RETRIES) {
@@ -135,6 +248,7 @@ async function postJsonRaw(
       continue;
     }
 
+    if (!specificKey) pool.release(keyToUse);
     const errText = await r.text().catch(() => "");
     throw new Error(`KieAI POST ${path} ${r.status}: ${errText.slice(0, 400)}`);
   }
@@ -158,7 +272,7 @@ export async function createKieTtsTask(opts: {
   if (opts.stability !== undefined) input.stability = opts.stability;
   if (opts.similarityBoost !== undefined) input.similarity_boost = opts.similarityBoost;
 
-  const json = await postJsonRaw(
+  const { json, usedKey } = await postJsonRaw(
     "/jobs/createTask",
     {
       model: opts.model || "elevenlabs/text-to-speech-multilingual-v2",
@@ -166,7 +280,9 @@ export async function createKieTtsTask(opts: {
     },
     ctx
   );
-  return extractTaskId(json, "/jobs/createTask");
+  const taskId = extractTaskId(json, "/jobs/createTask");
+  taskKeyMap.set(taskId, usedKey);
+  return taskId;
 }
 
 // ── Images ──────────────────────────────────────────────────────────────────
@@ -205,8 +321,10 @@ export async function createKieImageTask(opts: {
     delete body.prompt;
   }
 
-  const json = await postJsonRaw(endpoint, body, ctx);
-  return extractTaskId(json, endpoint);
+  const { json, usedKey } = await postJsonRaw(endpoint, body, ctx);
+  const taskId = extractTaskId(json, endpoint);
+  taskKeyMap.set(taskId, usedKey);
+  return taskId;
 }
 
 // ── Videos (img2vid) ────────────────────────────────────────────────────────
@@ -264,8 +382,9 @@ export async function createKieVideoTask(opts: {
     if (opts.duration) body.duration = opts.duration;
   }
 
-  const json = await postJsonRaw(endpoint, body, ctx);
+  const { json, usedKey } = await postJsonRaw(endpoint, body, ctx);
   const taskId = extractTaskId(json, endpoint);
+  taskKeyMap.set(taskId, usedKey);
   return { taskId, pollEndpoint };
 }
 
@@ -297,11 +416,12 @@ export async function pollKieTask(
     basePollPath = "/jobs/recordInfo";
   }
   let pollPath = `${basePollPath}?taskId=${encodeURIComponent(taskId)}`;
+  const keyToUse = taskKeyMap.get(taskId) || pool.pick();
 
   while (true) {
     if (runId) checkCancelled(runId);
     const r = await fetchWithTimeout(`${BASE}${pollPath}`, {
-      headers: authHeaders(),
+      headers: authHeadersFor(keyToUse),
     });
     if (!r.ok) {
       const elapsed = Math.round((Date.now() - start) / 1000);
@@ -363,11 +483,13 @@ export async function pollKieTask(
       return data || json;
     }
     if (status === "fail" || status === "failed" || status === "error") {
+      releaseKieTask(taskId);
       const msg = (data?.failMsg as string) || (data?.message as string) || (json.msg as string) || "unknown error";
       throw new Error(`KieAI task ${taskId} failed: ${msg}`);
     }
 
     if (Date.now() - start > POLL_MAX_MS) {
+      releaseKieTask(taskId);
       throw new Error(
         `KieAI task ${taskId} exceeded ${POLL_MAX_MS / 1000}s polling timeout (last status: ${status})`
       );
@@ -432,42 +554,47 @@ function findUrlInObject(obj: Record<string, unknown>): string | null {
 }
 
 /**
- * Download a completed task's output to a file.
+ * Download a completed task's output to a file. Releases the key slot.
  */
 export async function downloadKieTask(
   taskData: Record<string, unknown>,
-  outPath: string
+  outPath: string,
+  taskId?: string
 ): Promise<void> {
-  let url = extractUrl(taskData);
+  try {
+    let url = extractUrl(taskData);
 
-  // Last resort: find any URL-like string in the entire response
-  if (!url) {
-    const respStr = JSON.stringify(taskData);
-    const urlMatch = respStr.match(/https?:\/\/[^\s"\\}]+/);
-    if (urlMatch) {
-      url = urlMatch[0];
-    } else {
+    // Last resort: find any URL-like string in the entire response
+    if (!url) {
+      const respStr = JSON.stringify(taskData);
+      const urlMatch = respStr.match(/https?:\/\/[^\s"\\}]+/);
+      if (urlMatch) {
+        url = urlMatch[0];
+      } else {
+        throw new Error(
+          `KieAI: no download URL in response: ${respStr.slice(0, 500)}`
+        );
+      }
+    }
+
+    const r = await fetchWithTimeout(
+      url,
+      { redirect: "follow" },
+      DOWNLOAD_TIMEOUT_MS
+    );
+    if (!r.ok) {
+      throw new Error(`KieAI download ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length < 512) {
       throw new Error(
-        `KieAI: no download URL in response: ${respStr.slice(0, 500)}`
+        `KieAI download too small (${buf.length} bytes) — likely empty or error response`
       );
     }
+    fs.writeFileSync(outPath, buf);
+  } finally {
+    if (taskId) releaseKieTask(taskId);
   }
-
-  const r = await fetchWithTimeout(
-    url,
-    { redirect: "follow" },
-    DOWNLOAD_TIMEOUT_MS
-  );
-  if (!r.ok) {
-    throw new Error(`KieAI download ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  }
-  const buf = Buffer.from(await r.arrayBuffer());
-  if (buf.length < 512) {
-    throw new Error(
-      `KieAI download too small (${buf.length} bytes) — likely empty or error response`
-    );
-  }
-  fs.writeFileSync(outPath, buf);
 }
 
 function sleep(ms: number) {

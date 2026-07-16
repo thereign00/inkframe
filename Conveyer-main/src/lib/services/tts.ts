@@ -5,7 +5,7 @@ import { log } from "../logger";
 import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createTtsJob, pollJob, downloadJob, tryNextKey, getKeyList } from "./labs69";
-import { createKieTtsTask, pollKieTask, downloadKieTask } from "./kieai";
+import { createKieTtsTask, pollKieTask, downloadKieTask, getKieKeyList, tryNextKieKey, releaseKieTask } from "./kieai";
 
 export interface TtsResult {
   /** Path to the mp3 file. */
@@ -77,7 +77,7 @@ export async function synthesizeScene(
 }
 
 /**
- * Wraps synthesizeWithProvider with key-failover logic for 69labs.
+ * Wraps synthesizeWithProvider with key-failover logic for 69labs and KieAI.
  */
 async function synthesizeWithKeyFailover(
   runId: string,
@@ -85,38 +85,69 @@ async function synthesizeWithKeyFailover(
   scene: Scene,
   filePath: string,
 ): Promise<TtsResult> {
-  if (provider !== "69labs" || getKeyList().length <= 1) {
-    return synthesizeWithProvider(runId, provider, scene, filePath);
-  }
+  if (provider === "69labs" && getKeyList().length > 1) {
+    const failedKeys = new Set<string>();
+    let lastErr: Error | undefined;
 
-  const failedKeys = new Set<string>();
-  let lastErr: Error | undefined;
+    while (true) {
+      try {
+        return await synthesizeWithProvider(runId, provider, scene, filePath);
+      } catch (err) {
+        if (err instanceof CancelledError) throw err;
+        lastErr = err instanceof Error ? err : new Error(String(err));
 
-  while (true) {
-    try {
-      return await synthesizeWithProvider(runId, provider, scene, filePath);
-    } catch (err) {
-      if (err instanceof CancelledError) throw err;
-      lastErr = err instanceof Error ? err : new Error(String(err));
+        const currentKey = getKeyList().find((k) => !failedKeys.has(k));
+        if (currentKey) failedKeys.add(currentKey);
 
-      const currentKey = getKeyList().find((k) => !failedKeys.has(k));
-      if (currentKey) failedKeys.add(currentKey);
+        const nextKey = tryNextKey(failedKeys);
+        if (!nextKey) {
+          log(runId, "warn",
+            `TTS #${scene.index} exhausted all ${failedKeys.size} 69labs keys`,
+            { stage: "tts" }
+          );
+          throw lastErr;
+        }
 
-      const nextKey = tryNextKey(failedKeys);
-      if (!nextKey) {
-        log(runId, "warn",
-          `TTS #${scene.index} exhausted all ${failedKeys.size} 69labs keys`,
+        log(runId, "info",
+          `TTS #${scene.index} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
           { stage: "tts" }
         );
-        throw lastErr;
       }
-
-      log(runId, "info",
-        `TTS #${scene.index} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
-        { stage: "tts" }
-      );
     }
   }
+
+  if (provider === "kieai" && getKieKeyList().length > 1) {
+    const failedKeys = new Set<string>();
+    let lastErr: Error | undefined;
+
+    while (true) {
+      try {
+        return await synthesizeWithProvider(runId, provider, scene, filePath);
+      } catch (err) {
+        if (err instanceof CancelledError) throw err;
+        lastErr = err instanceof Error ? err : new Error(String(err));
+
+        const currentKey = getKieKeyList().find((k) => !failedKeys.has(k));
+        if (currentKey) failedKeys.add(currentKey);
+
+        const nextKey = tryNextKieKey(failedKeys);
+        if (!nextKey) {
+          log(runId, "warn",
+            `TTS #${scene.index} exhausted all ${failedKeys.size} KieAI keys`,
+            { stage: "tts" }
+          );
+          throw lastErr;
+        }
+
+        log(runId, "info",
+          `TTS #${scene.index} KieAI key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
+          { stage: "tts" }
+        );
+      }
+    }
+  }
+
+  return synthesizeWithProvider(runId, provider, scene, filePath);
 }
 
 /**
@@ -262,17 +293,24 @@ async function kieaiTts(runId: string, text: string, outPath: string) {
 
   log(runId, "debug", `KieAI TTS using voice=${voiceName} model=${kieModel}`, { stage: "tts" });
 
-  const taskId = await createKieTtsTask({
-    text,
-    voiceId: voiceName,
-    model: kieModel,
-    stability: Number.isNaN(stability) ? undefined : stability,
-    similarityBoost: Number.isNaN(similarity) ? undefined : similarity,
-    runId,
-  });
-  log(runId, "debug", `KieAI TTS task ${taskId.slice(0, 8)}… (${kieModel}/${voiceName})`, { stage: "tts" });
-  const data = await pollKieTask(taskId, runId, "tts");
-  await downloadKieTask(data, outPath);
+  let lastTaskId: string | undefined;
+  try {
+    const taskId = await createKieTtsTask({
+      text,
+      voiceId: voiceName,
+      model: kieModel,
+      stability: Number.isNaN(stability) ? undefined : stability,
+      similarityBoost: Number.isNaN(similarity) ? undefined : similarity,
+      runId,
+    });
+    lastTaskId = taskId;
+    log(runId, "debug", `KieAI TTS task ${taskId.slice(0, 8)}… (${kieModel}/${voiceName})`, { stage: "tts" });
+    const data = await pollKieTask(taskId, runId, "tts");
+    await downloadKieTask(data, outPath, taskId);
+  } catch (e) {
+    if (lastTaskId) releaseKieTask(lastTaskId);
+    throw e;
+  }
 }
 
 function parseFloatOr(s: string, fallback: number): number {

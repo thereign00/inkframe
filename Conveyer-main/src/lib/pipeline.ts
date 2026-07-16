@@ -13,6 +13,7 @@ import { pickScenesForStock, fetchStockVideo, clearUsedStockIds } from "./servic
 import { pickScenesForRealImages, fetchRealImage, clearUsedRealImages } from "./services/real-image";
 import { assembleVideo, type AssembleInput } from "./services/video-assemble";
 import { getKeyCount, getKeyList, setBatchKey, withSceneKey } from "./services/labs69";
+import { getKieKeyList, setBatchKieKey, withSceneKieKey } from "./services/kieai";
 import { syncRunToDrive } from "./services/run-upload";
 import { downloadReusedClip } from "./services/reuse";
 import { syncActiveChannelToLive } from "./channels";
@@ -189,38 +190,57 @@ export async function runPipeline(runId: string, script: string) {
 
       // ── Per-scene key assignment (block split) ────────────────────────
       // Split scenes across keys in blocks: Key 1 gets scenes 0-4,
-      // Key 2 gets scenes 5-9, etc. Each scene runs inside withSceneKey()
-      // so its key is isolated — concurrent scenes can't overwrite each other.
+      // Key 2 gets scenes 5-9, etc. Each scene runs inside withSceneKey/withSceneKieKey()
+      // so its keys are isolated — concurrent scenes can't overwrite each other.
       const keys69 = getKeyList();
-      const scenesPerKey = keys69.length > 0
+      const keysKie = getKieKeyList();
+
+      const scenesPerKey69 = keys69.length > 0
         ? Math.ceil(batch.length / keys69.length)
         : batch.length;
+      const scenesPerKeyKie = keysKie.length > 0
+        ? Math.ceil(batch.length / keysKie.length)
+        : batch.length;
+
+      const splitInfo = [
+        keys69.length > 1 ? `${keys69.length} 69labs keys (${scenesPerKey69} scenes/key)` : null,
+        keysKie.length > 1 ? `${keysKie.length} KieAI keys (${scenesPerKeyKie} scenes/key)` : null,
+      ].filter(Boolean).join(" · ");
 
       log(
         runId, "info",
         `▶ Batch ${batchNum}/${totalBatches}: scenes #${batchStart}–#${batchEnd - 1} (${batch.length} scenes)` +
-        (keys69.length > 1
-          ? ` · split across ${keys69.length} keys (${scenesPerKey} scenes/key)`
-          : ""),
+        (splitInfo ? ` · split across ${splitInfo}` : ""),
         { stage: "pipeline" }
       );
 
       // Process all scenes in this batch concurrently
       const batchPromises = batch.map((scene, batchIdx) => {
         // Block-based key: first N scenes → Key 1, next N → Key 2, etc.
-        const keyIndex = keys69.length > 0
-          ? Math.min(Math.floor(batchIdx / scenesPerKey), keys69.length - 1)
+        const keyIndex69 = keys69.length > 0
+          ? Math.min(Math.floor(batchIdx / scenesPerKey69), keys69.length - 1)
           : -1;
-        const sceneKey = keyIndex >= 0 ? keys69[keyIndex] : null;
+        const sceneKey69 = keyIndex69 >= 0 ? keys69[keyIndex69] : null;
 
-        if (sceneKey) {
+        const keyIndexKie = keysKie.length > 0
+          ? Math.min(Math.floor(batchIdx / scenesPerKeyKie), keysKie.length - 1)
+          : -1;
+        const sceneKeyKie = keyIndexKie >= 0 ? keysKie[keyIndexKie] : null;
+
+        if (sceneKey69) {
           log(runId, "debug",
-            `Scene #${scene.index} → key …${sceneKey.slice(-6)} (block ${keyIndex + 1}/${keys69.length})`,
+            `Scene #${scene.index} → 69labs key …${sceneKey69.slice(-6)} (block ${keyIndex69 + 1}/${keys69.length})`,
+            { stage: "pipeline" }
+          );
+        }
+        if (sceneKeyKie) {
+          log(runId, "debug",
+            `Scene #${scene.index} → KieAI key …${sceneKeyKie.slice(-6)} (block ${keyIndexKie + 1}/${keysKie.length})`,
             { stage: "pipeline" }
           );
         }
 
-        // Wrap in withSceneKey so the key is isolated per async context
+        // Wrap in withSceneKey / withSceneKieKey so keys are isolated per async context
         const runScene = () => processScene(
           runId, scene,
           { audioDir, imgDir, animDir },
@@ -228,9 +248,16 @@ export async function runPipeline(runId: string, script: string) {
           { animTargets, stockTargets, realImageTargets, reuseMap },
         );
 
-        return sceneKey
-          ? withSceneKey(sceneKey, runScene)
-          : runScene();
+        let wrapped = runScene;
+        if (sceneKey69) {
+          const prev = wrapped;
+          wrapped = () => withSceneKey(sceneKey69!, prev);
+        }
+        if (sceneKeyKie) {
+          const prev = wrapped;
+          wrapped = () => withSceneKieKey(sceneKeyKie!, prev);
+        }
+        return wrapped();
       });
 
       // Wait for EVERY scene in the batch to complete
@@ -374,13 +401,15 @@ export async function runPipeline(runId: string, script: string) {
       log(runId, "warn", `Drive sync failed (local files preserved): ${msg}`, { stage: "gdrive" });
     }
 
-    // Clear batch key so non-pipeline 69labs calls aren't affected
+    // Clear batch key so non-pipeline 69labs/kieai calls aren't affected
     setBatchKey(null);
+    setBatchKieKey(null);
 
     updateRun.run("done", finalPath, runId);
     log(runId, "success", "Pipeline complete", { stage: "pipeline", data: { finalPath } });
   } catch (e) {
     setBatchKey(null);
+    setBatchKieKey(null);
     const cancelErr = e instanceof CancelledError ? e : new CancelledError("Pipeline stopped");
     limitTts?.clearQueue(cancelErr);
     limitImg?.clearQueue(cancelErr);

@@ -6,7 +6,7 @@ import { log } from "../logger";
 import { checkCancelled, CancelledError } from "../cancellation";
 import type { Scene } from "./scene-split";
 import { createVideoJob, pollJob, downloadJob, cancelJob, releaseJob, setBatchKey, tryNextKey, getKeyList } from "./labs69";
-import { createKieVideoTask, pollKieTask, downloadKieTask } from "./kieai";
+import { createKieVideoTask, pollKieTask, downloadKieTask, getKieKeyList, tryNextKieKey, releaseKieTask } from "./kieai";
 import { generateImage } from "./image-gen";
 import { comfyuiImg2Vid } from "./comfyui";
 
@@ -153,7 +153,7 @@ export async function animateScene(
 }
 
 /**
- * Wraps runAnimProvider with key-failover logic for 69labs.
+ * Wraps runAnimProvider with key-failover logic for 69labs and KieAI.
  */
 async function runAnimWithKeyFailover(
   runId: string,
@@ -163,38 +163,69 @@ async function runAnimWithKeyFailover(
   filePath: string,
   options: { providerJobId?: string; imageProvider?: string },
 ): Promise<void> {
-  if (provider !== "69labs" || getKeyList().length <= 1) {
-    return runAnimProvider(runId, provider, scene, imagePath, filePath, options);
-  }
+  if (provider === "69labs" && getKeyList().length > 1) {
+    const failedKeys = new Set<string>();
+    let lastErr: Error | undefined;
 
-  const failedKeys = new Set<string>();
-  let lastErr: Error | undefined;
+    while (true) {
+      try {
+        return await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
+      } catch (err) {
+        if (err instanceof CancelledError) throw err;
+        lastErr = err instanceof Error ? err : new Error(String(err));
 
-  while (true) {
-    try {
-      return await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
-    } catch (err) {
-      if (err instanceof CancelledError) throw err;
-      lastErr = err instanceof Error ? err : new Error(String(err));
+        const currentKey = getKeyList().find((k) => !failedKeys.has(k));
+        if (currentKey) failedKeys.add(currentKey);
 
-      const currentKey = getKeyList().find((k) => !failedKeys.has(k));
-      if (currentKey) failedKeys.add(currentKey);
+        const nextKey = tryNextKey(failedKeys);
+        if (!nextKey) {
+          log(runId, "warn",
+            `Anim #${scene.index} exhausted all ${failedKeys.size} 69labs keys`,
+            { stage: "animate" }
+          );
+          throw lastErr;
+        }
 
-      const nextKey = tryNextKey(failedKeys);
-      if (!nextKey) {
-        log(runId, "warn",
-          `Anim #${scene.index} exhausted all ${failedKeys.size} 69labs keys`,
+        log(runId, "info",
+          `Anim #${scene.index} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
           { stage: "animate" }
         );
-        throw lastErr;
       }
-
-      log(runId, "info",
-        `Anim #${scene.index} key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
-        { stage: "animate" }
-      );
     }
   }
+
+  if (provider === "kieai" && getKieKeyList().length > 1) {
+    const failedKeys = new Set<string>();
+    let lastErr: Error | undefined;
+
+    while (true) {
+      try {
+        return await runAnimProvider(runId, provider, scene, imagePath, filePath, options);
+      } catch (err) {
+        if (err instanceof CancelledError) throw err;
+        lastErr = err instanceof Error ? err : new Error(String(err));
+
+        const currentKey = getKieKeyList().find((k) => !failedKeys.has(k));
+        if (currentKey) failedKeys.add(currentKey);
+
+        const nextKey = tryNextKieKey(failedKeys);
+        if (!nextKey) {
+          log(runId, "warn",
+            `Anim #${scene.index} exhausted all ${failedKeys.size} KieAI keys`,
+            { stage: "animate" }
+          );
+          throw lastErr;
+        }
+
+        log(runId, "info",
+          `Anim #${scene.index} KieAI key …${currentKey?.slice(-6) || "?"} failed → trying key …${nextKey.slice(-6)}`,
+          { stage: "animate" }
+        );
+      }
+    }
+  }
+
+  return runAnimProvider(runId, provider, scene, imagePath, filePath, options);
 }
 
 /** Run animation with a specific provider. */
@@ -341,6 +372,7 @@ async function kieaiImg2Vid(
 
   const MAX_ATTEMPTS = 3;
   let lastErr: unknown;
+  let lastTaskId: string | undefined;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
@@ -353,6 +385,7 @@ async function kieaiImg2Vid(
         quality,
         runId,
       });
+      lastTaskId = taskId;
       log(
         runId,
         "debug",
@@ -360,9 +393,10 @@ async function kieaiImg2Vid(
         { stage: "animate" }
       );
       const data = await pollKieTask(taskId, runId, "animate", "debug", pollEndpoint);
-      await downloadKieTask(data, outPath);
+      await downloadKieTask(data, outPath, taskId);
       return;
     } catch (e) {
+      if (lastTaskId) releaseKieTask(lastTaskId);
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
       if (attempt < MAX_ATTEMPTS) {
