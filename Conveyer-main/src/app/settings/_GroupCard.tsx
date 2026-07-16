@@ -103,7 +103,7 @@ export function GroupCard(props: {
                 }}
               />
             )}
-            {f.key === "LABS69_API_KEY" && values[f.key] && (
+            {(f.key === "LABS69_API_KEY" || f.key === "KIEAI_API_KEY") && values[f.key] && (
               <div style={{ color: "#7c5cff", fontSize: 12, marginTop: 6 }}>
                 🔑 Detected{" "}
                 <strong>

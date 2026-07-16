@@ -41,8 +41,9 @@ const MAIN_GROUPS: Group[] = [
       },
       {
         key: "KIEAI_API_KEY",
-        desc: "Alternative to 69labs — Kie AI (kie.ai) is a unified gateway for TTS, images, and video. Set TTS_PROVIDER / IMAGE_PROVIDER / ANIMATION_PROVIDER to 'kieai' in Advanced settings to use it. Both providers can coexist — just set the one you want per service.",
-        examples: "Get your API key from https://kie.ai → Dashboard → API Keys",
+        desc: "Alternative to 69labs — Kie AI (kie.ai) is a unified gateway for TTS, images, and video. Set TTS_PROVIDER / IMAGE_PROVIDER / ANIMATION_PROVIDER to 'kieai' in Advanced settings to use it.\n\nPRO TIP: You can paste multiple keys from different Kie AI accounts (one per line, or comma-separated). The pipeline will distribute scenes across all your active keys in parallel and fail over automatically if one hits rate limits.",
+        examples: "Single key: kie_key... · Multiple keys: paste each on its own line.",
+        multiline: true,
       },
       {
         key: "PIXABAY_API_KEY",
