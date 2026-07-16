@@ -264,7 +264,15 @@ async function labs69Img2Vid(
   imageProvider: string | undefined,
   outPath: string
 ) {
-  const model = getSetting("ANIMATION_MODEL") || undefined;
+  const rawModel = (getSetting("ANIMATION_MODEL") || "").trim();
+  const LABS69_VIDEO_MODEL_MAP: Record<string, string> = {
+    "veo3_fast": "veo-video",
+    "veo": "veo-video",
+    "kling": "veo-video",
+    "wan": "veo-video",
+    "minimax": "veo-video",
+  };
+  const model = LABS69_VIDEO_MODEL_MAP[rawModel] || rawModel || undefined;
   const aspectRatio = getSetting("IMAGE_RATIO") || undefined;
   const durationSetting = getSetting("ANIMATION_DURATION") || undefined;
   // ANIMATION_KEEP_VEO_AUDIO=1 — keep Veo's generated audio (default: off, mute it).
@@ -344,19 +352,21 @@ async function kieaiImg2Vid(
   imagePath: string,
   outPath: string
 ) {
-  // Use the dedicated KieAI default video model if set, otherwise map from primary
-  const kieDefault = getSetting("KIEAI_DEFAULT_VIDEO_MODEL");
+  const primaryProvider = (getSetting("ANIMATION_PROVIDER") || "kieai").toLowerCase();
+  const rawModel = (getSetting("ANIMATION_MODEL") || "").trim();
+  const kieDefault = (getSetting("KIEAI_DEFAULT_VIDEO_MODEL") || "veo3_fast").trim();
+
+  const KIE_VIDEO_MODEL_MAP: Record<string, string> = {
+    "veo-video": "veo3_fast",
+    "veo": "veo3_fast",
+    "grok-imagine-video": "veo3_fast",
+  };
+
   let model: string;
-  if (kieDefault) {
-    model = kieDefault;
+  if (primaryProvider === "kieai" && rawModel) {
+    model = KIE_VIDEO_MODEL_MAP[rawModel] || rawModel;
   } else {
-    const rawModel = (getSetting("ANIMATION_MODEL") || "").trim();
-    const KIE_VIDEO_MODEL_MAP: Record<string, string> = {
-      "veo-video": "veo3_fast",
-      "veo": "veo3_fast",
-      "grok-imagine-video": "veo3_fast",
-    };
-    model = KIE_VIDEO_MODEL_MAP[rawModel] || rawModel || "veo3_fast";
+    model = kieDefault || KIE_VIDEO_MODEL_MAP[rawModel] || rawModel || "veo3_fast";
   }
   const aspectRatio = getSetting("IMAGE_RATIO") || "16:9";
   const durationSetting = getSetting("ANIMATION_DURATION") || "5";

@@ -760,7 +760,7 @@ export async function pickScenesForRealImages(
   excludeIndices = new Set<number>()
 ): Promise<Set<number>> {
   const selected = new Set<number>();
-  if (scenes.length === 0 || getSetting("REAL_IMAGE_PROVIDER") === "off") return selected;
+  if (scenes.length === 0 || ratioPercent <= 0 || getSetting("REAL_IMAGE_PROVIDER") === "off") return selected;
 
   const available = scenes.filter((s) => !excludeIndices.has(s.index));
   if (available.length === 0) return selected;

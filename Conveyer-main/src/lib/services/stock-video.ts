@@ -13,9 +13,10 @@ export function pickScenesForStock(
   ratioPercent: number,
   excludeIndices = new Set<number>()
 ): Set<number> {
+  if (ratioPercent <= 0 || getSetting("STOCK_FOOTAGE_PROVIDER") === "off") return new Set();
   const available = scenes.filter((s) => !excludeIndices.has(s.index));
   if (ratioPercent >= 100) return new Set(available.map((s) => s.index));
-  if (ratioPercent <= 0 || available.length === 0) return new Set();
+  if (available.length === 0) return new Set();
   const target = Math.max(1, Math.round((available.length * ratioPercent) / 100));
   const step = available.length / target;
   const picks = new Set<number>();

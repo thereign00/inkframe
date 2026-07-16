@@ -200,7 +200,13 @@ async function generateWithProvider(
 }
 
 async function labs69Image(runId: string, prompt: string, outPath: string): Promise<string> {
-  const model = getSetting("IMAGE_MODEL") || "img-flux"; // 69labs name for Flux Schnell
+  const rawModel = (getSetting("IMAGE_MODEL") || "").trim();
+  const LABS69_IMAGE_MODEL_MAP: Record<string, string> = {
+    "flux-kontext-pro": "img-flux",
+    "flux-schnell": "img-flux",
+    "nano-banana-pro": "nano-banana-pro",
+  };
+  const model = LABS69_IMAGE_MODEL_MAP[rawModel] || (rawModel.startsWith("flux-") ? "img-flux" : rawModel) || "img-flux";
   let aspectRatio = getSetting("IMAGE_RATIO") || undefined;
 
   // Imagen 4 only accepts 'square|portrait|landscape', not numeric ratios like '16:9'.
@@ -278,21 +284,24 @@ async function labs69Image(runId: string, prompt: string, outPath: string): Prom
 async function kieaiImage(runId: string, prompt: string, outPath: string) {
   const aspectRatio = getSetting("IMAGE_RATIO") || "16:9";
 
-  // Use the dedicated KieAI default model if set, otherwise map from primary
-  const kieDefault = getSetting("KIEAI_DEFAULT_IMAGE_MODEL");
+  const primaryProvider = (getSetting("IMAGE_PROVIDER") || "kieai").toLowerCase();
+  const rawModel = (getSetting("IMAGE_MODEL") || "").trim();
+  const kieDefault = (getSetting("KIEAI_DEFAULT_IMAGE_MODEL") || "flux-kontext-pro").trim();
+
+  const KIE_IMAGE_MODEL_MAP: Record<string, string> = {
+    "nano-banana-pro": "flux-kontext-pro",
+    "nano-banana": "flux-kontext-pro",
+    "img-flux": "flux-kontext-pro",
+    "imagen-4": "flux-kontext-pro",
+    "seedream-4.5": "flux-kontext-pro",
+    "flux-2-pro": "flux-kontext-pro",
+  };
+
   let model: string;
-  if (kieDefault) {
-    model = kieDefault;
+  if (primaryProvider === "kieai" && rawModel) {
+    model = KIE_IMAGE_MODEL_MAP[rawModel] || rawModel;
   } else {
-    const rawModel = getSetting("IMAGE_MODEL") || "";
-    const KIE_IMAGE_MODEL_MAP: Record<string, string> = {
-      "nano-banana-pro": "flux-kontext-pro",
-      "nano-banana": "flux-kontext-pro",
-      "imagen-4": "flux-kontext-pro",
-      "seedream-4.5": "flux-kontext-pro",
-      "flux-2-pro": "flux-kontext-pro",
-    };
-    model = KIE_IMAGE_MODEL_MAP[rawModel] || rawModel || "flux-kontext-pro";
+    model = kieDefault || KIE_IMAGE_MODEL_MAP[rawModel] || rawModel || "flux-kontext-pro";
   }
 
   const MAX_ATTEMPTS = 3;

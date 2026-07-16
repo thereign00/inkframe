@@ -145,8 +145,13 @@ const GROUPS: Group[] = [
       },
       {
         key: "IMAGE_MODEL",
-        desc: "The specific model. For photorealism try `imagen-4` (Google) or `seedream-4.5`. For balance of quality and detail try `nano-banana-pro` (default). For maximum hyperreal style try `flux-2-pro` (2 credits per image).",
-        examples: "nano-banana-pro, imagen-4, seedream-4.5, gpt-image-2, flux-2-pro",
+        desc: "The primary image model (used for 69labs, Replicate, fal, or Kie AI when selected). For 69labs: `nano-banana-pro` (default), `imagen-4`, `seedream-4.5`. For Kie AI: `flux-kontext-pro`, `imagen-4`, `flux-2-pro`.",
+        examples: "nano-banana-pro, flux-kontext-pro, imagen-4, seedream-4.5, flux-2-pro",
+      },
+      {
+        key: "KIEAI_DEFAULT_IMAGE_MODEL",
+        desc: "Dedicated fallback model when Kie AI is triggered (either directly or during automatic failover from 69labs). Defaults to `flux-kontext-pro`.",
+        examples: "flux-kontext-pro, nano-banana-pro, imagen-4, seedream-4.5",
       },
       {
         key: "IMAGE_RATIO",
@@ -199,8 +204,13 @@ const GROUPS: Group[] = [
       },
       {
         key: "ANIMATION_MODEL",
-        desc: "Specific model id. `veo-video` (Google Veo 3.1 Fast) is the highest quality option in 69labs. `grok-imagine-video` is a slightly different style. For Replicate, use `kwaivgi/kling-v1.6-pro` for cinematic motion.",
-        examples: "veo-video, grok-imagine-video, kwaivgi/kling-v1.6-standard",
+        desc: "Primary video animation model. For 69labs: `veo-video` (Google Veo 3.1 Fast) or `grok-imagine-video`. For Kie AI: `veo3_fast`, `kling`, `wan`, `minimax`.",
+        examples: "veo-video, veo3_fast, grok-imagine-video, kling, wan",
+      },
+      {
+        key: "KIEAI_DEFAULT_VIDEO_MODEL",
+        desc: "Dedicated fallback video model when Kie AI is triggered (either directly or during automatic failover from 69labs). Defaults to `veo3_fast`.",
+        examples: "veo3_fast, kling, wan, minimax",
       },
       {
         key: "ANIMATION_RATIO_PERCENT",

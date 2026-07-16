@@ -158,11 +158,19 @@ export async function runPipeline(runId: string, script: string) {
         ? pickScenesToAnimate(scenes, animRatio, animDistribution)
         : new Set<number>();
 
-    const realImageRatio = Number(getSetting("REAL_IMAGE_RATIO_PERCENT") || "0");
-    const realImageTargets = await pickScenesForRealImages(runId, scenes, realImageRatio);
+    const realImageProvider = (getSetting("REAL_IMAGE_PROVIDER") || "all").toLowerCase();
+    const realImageRatio = realImageProvider !== "off" ? Number(getSetting("REAL_IMAGE_RATIO_PERCENT") || "0") : 0;
+    const realImageTargets =
+      realImageRatio > 0 && realImageProvider !== "off"
+        ? await pickScenesForRealImages(runId, scenes, realImageRatio)
+        : new Set<number>();
 
-    const stockRatio = Number(getSetting("STOCK_FOOTAGE_RATIO_PERCENT") || "0");
-    const stockTargets = pickScenesForStock(scenes, stockRatio, realImageTargets);
+    const stockProvider = (getSetting("STOCK_FOOTAGE_PROVIDER") || "all").toLowerCase();
+    const stockRatio = stockProvider !== "off" ? Number(getSetting("STOCK_FOOTAGE_RATIO_PERCENT") || "0") : 0;
+    const stockTargets =
+      stockRatio > 0 && stockProvider !== "off"
+        ? pickScenesForStock(scenes, stockRatio, realImageTargets)
+        : new Set<number>();
 
     const totalBatches = Math.ceil(scenes.length / BATCH_SIZE);
 
