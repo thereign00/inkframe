@@ -137,12 +137,12 @@ const _overrides = new Map<string, string>();
 /** Load channel-scoped settings into the in-memory override map.
  *  Called by channels.ts whenever settings are saved or a channel is activated. */
 export function applyChannelOverrides(settings: Record<string, string>) {
+  _overrides.clear();
   for (const key of CHANNEL_SCOPED_KEYS) {
-    if (key in settings) {
-      _overrides.set(key, settings[key]);
-      // Also persist to DB for non-pipeline readers (settings page, etc)
-      upsertStmt.run(key, settings[key]);
-    }
+    const val = key in settings && settings[key] !== undefined ? settings[key] : (DEFAULTS[key] ?? "");
+    _overrides.set(key, val);
+    // Also persist to DB for non-pipeline readers (settings page, etc)
+    upsertStmt.run(key, val);
   }
 }
 
@@ -331,6 +331,7 @@ export const CHANNEL_SCOPED_KEYS: SettingKey[] = [
   "VIDEO_QUALITY",
   "KIEAI_DEFAULT_IMAGE_MODEL", "KIEAI_DEFAULT_VIDEO_MODEL",
   "DIRECTOR_MODE", "DIRECTOR_PROMPT", "INTRO_HOOK_PERCENT", "STOCK_FOOTAGE_RATIO_PERCENT", "STOCK_FOOTAGE_PROVIDER",
+  "REAL_IMAGE_RATIO_PERCENT", "REAL_IMAGE_PROVIDER",
 ];
 
 /** Retrieve run-specific director notes from config_json if provided by user on run creation */

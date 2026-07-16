@@ -298,8 +298,13 @@ async function kieaiImage(runId: string, prompt: string, outPath: string) {
   };
 
   let model: string;
-  if (primaryProvider === "kieai" && rawModel) {
-    model = KIE_IMAGE_MODEL_MAP[rawModel] || rawModel;
+  const is69labsSpecificImageModel = ["nano-banana-pro", "nano-banana", "img-flux", "imagen-4", "seedream-4.5", "flux-2-pro"].includes(rawModel);
+  if (primaryProvider === "kieai") {
+    if (rawModel && !is69labsSpecificImageModel) {
+      model = KIE_IMAGE_MODEL_MAP[rawModel] || rawModel;
+    } else {
+      model = kieDefault || KIE_IMAGE_MODEL_MAP[rawModel] || rawModel || "flux-kontext-pro";
+    }
   } else {
     model = kieDefault || KIE_IMAGE_MODEL_MAP[rawModel] || rawModel || "flux-kontext-pro";
   }

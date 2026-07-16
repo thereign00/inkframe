@@ -345,25 +345,25 @@ export async function createKieVideoTask(opts: {
   let pollEndpoint: string;
   const body: Record<string, unknown> = { prompt: opts.prompt };
 
-  if (model.startsWith("veo")) {
+  if (model.startsWith("veo") || model.includes("veo")) {
     endpoint = "/veo/generate";
     pollEndpoint = "/veo/record-info";
     body.model = model;
     if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio;
-  } else if (model.startsWith("kling")) {
+  } else if (model.startsWith("kling") || model.includes("kling")) {
     endpoint = "/kling/generate";
     pollEndpoint = "/kling/record-info";
-    body.model_name = model;
+    body.model_name = model.includes("kwaivgi/") ? model.replace("kwaivgi/", "") : model;
     if (opts.imageUrl) body.image = opts.imageUrl;
     if (opts.duration) body.duration = String(opts.duration);
     if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio;
-  } else if (model.startsWith("minimax")) {
+  } else if (model.startsWith("minimax") || model.includes("minimax")) {
     endpoint = "/minimax/generate";
     pollEndpoint = "/minimax/record-info";
     body.model = model;
     if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio;
     if (opts.duration) body.duration = opts.duration;
-  } else if (model.startsWith("wan")) {
+  } else if (model.startsWith("wan") || model.includes("wan")) {
     endpoint = "/wan/generate";
     pollEndpoint = "/wan/record-info";
     body.model = model;

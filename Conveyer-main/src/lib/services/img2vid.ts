@@ -363,8 +363,13 @@ async function kieaiImg2Vid(
   };
 
   let model: string;
-  if (primaryProvider === "kieai" && rawModel) {
-    model = KIE_VIDEO_MODEL_MAP[rawModel] || rawModel;
+  const is69labsSpecificVideoModel = ["veo-video", "grok-imagine-video", "veo3lite", "veo"].includes(rawModel);
+  if (primaryProvider === "kieai") {
+    if (rawModel && !is69labsSpecificVideoModel) {
+      model = KIE_VIDEO_MODEL_MAP[rawModel] || rawModel;
+    } else {
+      model = kieDefault || KIE_VIDEO_MODEL_MAP[rawModel] || rawModel || "veo3_fast";
+    }
   } else {
     model = kieDefault || KIE_VIDEO_MODEL_MAP[rawModel] || rawModel || "veo3_fast";
   }
